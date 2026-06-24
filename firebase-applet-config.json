@@ -1,8 +1,9 @@
 {
-  apiKey: "AIzaSyANrP3pRoOztr5yBSYcIhQWsNTkk50UEx4",
-  authDomain: "divi-ai-1d969.firebaseapp.com",
-  projectId: "divi-ai-1d969",
-  storageBucket: "divi-ai-1d969.firebasestorage.app",
-  messagingSenderId: "983339321969",
-  appId: "1:983339321969:web:4b44232a87ad7d9c43e9d0"
+  "projectId": "divi-ai-1d969",
+  "appId": "1:983339321969:web:4b44232a87ad7d9c43e9d0",
+  "apiKey": "AIzaSyANrP3pRoOztr5yBSYcIhQWsNTkk50UEx4",
+  "authDomain": "divi-ai-1d969.firebaseapp.com",
+  "storageBucket": "divi-ai-1d969.firebasestorage.app",
+  "messagingSenderId": "983339321969",
+  "measurementId": "G-BPV98QYJGX"
 }

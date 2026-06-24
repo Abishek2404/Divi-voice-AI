@@ -2,7 +2,7 @@
 
 Divi is a full-stack, real-time voice-to-voice AI companion with a charming personality, witty humor, and powerful long-term memory capabilities. It leverages the Gemini Live API for low-latency voice interactions and a background cognitive processor to seamlessly extract and persist user facts and preferences over time.
 
-## Key Features
+## 🌟 Key Features
 
 - **Real-Time Voice Interactions:** Connects via WebSocket to the Gemini Live API for fluid, two-way audio streaming.
 - **Durable Long-Term Memory:** 
@@ -13,14 +13,14 @@ Divi is a full-stack, real-time voice-to-voice AI companion with a charming pers
   - Server-side Express backend to securely route API calls, manage database interactions, and protect the Gemini API key.
 - **User Authentication:** Firebase Auth integration ensures personalized and secure memory isolation.
 
-## Tech Stack
+## 🛠 Tech Stack
 
 - **Frontend:** React, Vite, Tailwind CSS, Lucide React, Recharts
 - **Backend:** Node.js, Express, TypeScript (`tsx` for local dev, `esbuild` for production)
 - **Database:** MongoDB (via Mongoose)
 - **AI Capabilities:** Google GenAI SDK (`@google/genai`)
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 
@@ -87,13 +87,13 @@ This command will output the frontend assets to the `dist` directory and compile
 npm run start
 ```
 
-## Memory System Architecture
+## 🧠 Memory System Architecture
 
 Divi's memory works in two stages:
 1. **Live Session:** The `AudioStreamer` captures both user and AI dialogue throughout the session.
 2. **Extraction:** Once a session ends, `MemoryService`'s `runExtractionAndSync` is triggered. It uses Gemini to analyze the transcript, detect new facts or preferences, and store them securely in the MongoDB `UserMemories` collection. This context is then injected into future system prompts so Divi never forgets your key details.
 
-## Deployment
+## ☁️ Deployment
 
 Because Divi uses the **Gemini Live API via WebSockets** and requires a running Node.js server, we have separated the frontend and backend setup so you can host the UI on Vercel and the backend on a WebSocket-compatible host like Railway or Render.
 

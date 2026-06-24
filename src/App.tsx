@@ -300,11 +300,19 @@ export default function App() {
     }
   };
 
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const handleLogin = async () => {
     try {
+      setAuthError(null);
       await signInWithPopup(auth, googleAuthProvider);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Popup Sign in rejected:", err);
+      if (err.code === "auth/unauthorized-domain") {
+        setAuthError("Domain not authorized in Firebase. Add this URL to Firebase Console > Authentication > Settings > Authorized domains.");
+      } else {
+        setAuthError(err.message || "Failed to sign in. Check console for details.");
+      }
     }
   };
 
@@ -406,12 +414,19 @@ export default function App() {
               </button>
             </div>
           ) : (
-            <button
-              onClick={handleLogin}
-              className="px-5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 cursor-pointer z-20"
-            >
-              Sign In with Google
-            </button>
+            <div className="flex flex-col items-end gap-2">
+              <button
+                onClick={handleLogin}
+                className="px-5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 cursor-pointer z-20"
+              >
+                Sign In with Google
+              </button>
+              {authError && (
+                <div className="absolute top-16 right-6 z-50 max-w-xs bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] px-3 py-2 rounded-lg backdrop-blur-md shadow-lg">
+                  {authError}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </header>
