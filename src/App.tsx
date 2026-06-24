@@ -4,6 +4,7 @@
  */
 
 import { useState, useEffect } from "react";
+import { getApiUrl } from "./lib/api";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   MessageSquareOff, 
@@ -98,7 +99,7 @@ export default function App() {
     setIsCreating(true);
     setMemoryError(null);
     try {
-      const response = await fetch("/api/memories", {
+      const response = await fetch(getApiUrl("/api/memories"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -131,7 +132,7 @@ export default function App() {
     setIsEditingSaving(true);
     setMemoryError(null);
     try {
-      const response = await fetch(`/api/memories/${id}`, {
+      const response = await fetch(getApiUrl(`/api/memories/${id}`), {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -162,7 +163,7 @@ export default function App() {
     if (!idToken) return;
     setMemoryError(null);
     try {
-      const response = await fetch(`/api/memories/${id}`, {
+      const response = await fetch(getApiUrl(`/api/memories/${id}`), {
         method: "DELETE",
         headers: {
           "Authorization": `Bearer ${idToken}`
@@ -184,7 +185,7 @@ export default function App() {
     if (!debugSearchQuery.trim() || !idToken) return;
     setIsDebugSearchLoading(true);
     try {
-      const res = await fetch("/api/memories/search", {
+      const res = await fetch(getApiUrl("/api/memories/search"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -208,7 +209,7 @@ export default function App() {
     if (!targetId || !idToken) return;
     setIsDebugInspectLoading(true);
     try {
-      const res = await fetch(`/api/memories/inspector/${targetId}`, {
+      const res = await fetch(getApiUrl(`/api/memories/inspector/${targetId}`), {
         headers: {
           "Authorization": `Bearer ${idToken}`
         }
@@ -233,7 +234,7 @@ export default function App() {
     if (!idToken) return;
     setIsDebugPromptLoading(true);
     try {
-      const res = await fetch("/api/memories/debug-prompt", {
+      const res = await fetch(getApiUrl("/api/memories/debug-prompt"), {
         headers: {
           "Authorization": `Bearer ${idToken}`
         }
@@ -260,7 +261,7 @@ export default function App() {
           setIdToken(tokenStr);
 
           // Synchronize user profile database record in Cloud SQL
-          await fetch("/api/auth/sync", {
+          await fetch(getApiUrl("/api/auth/sync"), {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -285,7 +286,7 @@ export default function App() {
   // Fetch the stored memory items from cloud REST APIs
   const loadUserMemories = async (tokenStr: string) => {
     try {
-      const response = await fetch("/api/memories", {
+      const response = await fetch(getApiUrl("/api/memories"), {
         headers: {
           "Authorization": `Bearer ${tokenStr}`
         }

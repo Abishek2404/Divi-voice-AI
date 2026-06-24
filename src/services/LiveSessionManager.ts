@@ -6,6 +6,7 @@
 import { AssistantState } from "../types";
 import { useAssistantStore } from "../store";
 import { AudioStreamer } from "./AudioStreamer";
+import { getWsUrl } from "../lib/api";
 
 export class LiveSessionManager {
   private socket: WebSocket | null = null;
@@ -55,10 +56,8 @@ export class LiveSessionManager {
       }
 
       // 2. Prep standard connection URL with optional ID Token for user memory lookup
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const host = window.location.host;
       const queryParam = idToken ? `?token=${encodeURIComponent(idToken)}` : "";
-      const socketUrl = `${protocol}//${host}/api/live-stream${queryParam}`;
+      const socketUrl = getWsUrl(`/api/live-stream${queryParam}`);
 
       console.log(`Connecting Divi Live WebSocket to: ${socketUrl}`);
       this.socket = new WebSocket(socketUrl);

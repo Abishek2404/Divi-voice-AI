@@ -2,7 +2,7 @@
 
 Divi is a full-stack, real-time voice-to-voice AI companion with a charming personality, witty humor, and powerful long-term memory capabilities. It leverages the Gemini Live API for low-latency voice interactions and a background cognitive processor to seamlessly extract and persist user facts and preferences over time.
 
-## Key Features
+## 🌟 Key Features
 
 - **Real-Time Voice Interactions:** Connects via WebSocket to the Gemini Live API for fluid, two-way audio streaming.
 - **Durable Long-Term Memory:** 
@@ -92,3 +92,28 @@ npm run start
 Divi's memory works in two stages:
 1. **Live Session:** The `AudioStreamer` captures both user and AI dialogue throughout the session.
 2. **Extraction:** Once a session ends, `MemoryService`'s `runExtractionAndSync` is triggered. It uses Gemini to analyze the transcript, detect new facts or preferences, and store them securely in the MongoDB `UserMemories` collection. This context is then injected into future system prompts so Divi never forgets your key details.
+
+## ☁️ Deployment
+
+Because Divi uses the **Gemini Live API via WebSockets** and requires a running Node.js server, we have separated the frontend and backend setup so you can host the UI on Vercel and the backend on a WebSocket-compatible host like Railway or Render.
+
+### Step 1: Deploy the Backend (Railway / Render / Fly.io)
+
+1. Push your repository to GitHub.
+2. Log into [Railway](https://railway.app/) or [Render](https://render.com/).
+3. Create a new Web Service from your repository.
+4. Set the build command: `npm run build`
+5. Set the start command: `npm run start`
+6. Add your environment variables (`GEMINI_API_KEY` and `MONGODB_URI`).
+7. Once deployed, copy your backend URL (e.g., `https://divi-backend.up.railway.app`).
+
+### Step 2: Deploy the Frontend to Vercel
+
+The project has been configured to dynamically point to an external backend using `import.meta.env.VITE_BACKEND_URL`. A `vercel.json` file is already included for SPA routing.
+
+1. Log into [Vercel](https://vercel.com/) and create a new project from your repository.
+2. In the **Environment Variables** settings before deploying, add:
+   - `VITE_BACKEND_URL`: Set this to your backend URL from Step 1 (e.g., `https://divi-backend.up.railway.app`).
+3. Click **Deploy**.
+
+Vercel will build the Vite frontend (`dist` folder) and host it securely. The frontend will automatically route its REST API and WebSocket connections to your dedicated backend!
