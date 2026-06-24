@@ -1,9 +1,9 @@
 {
-  "projectId": "turing-carport-7v7sv",
-  "appId": "1:158147672511:web:57058a4df510f4cc44490a",
-  "apiKey": "AIzaSyAKfwFD-_DQrJ97WORJMYLPl-KHw8e33SU",
-  "authDomain": "turing-carport-7v7sv.firebaseapp.com",
-  "storageBucket": "turing-carport-7v7sv.firebasestorage.app",
-  "messagingSenderId": "158147672511",
-  "measurementId": ""
+  apiKey: "AIzaSyANrP3pRoOztr5yBSYcIhQWsNTkk50UEx4",
+  authDomain: "divi-ai-1d969.firebaseapp.com",
+  projectId: "divi-ai-1d969",
+  storageBucket: "divi-ai-1d969.firebasestorage.app",
+  messagingSenderId: "983339321969",
+  appId: "1:983339321969:web:4b44232a87ad7d9c43e9d0",
+  measurementId: "G-BPV98QYJGX"
 }
