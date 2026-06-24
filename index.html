@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Divi - AI Voice Companion</title>
+    <script>
+      function reportErrorToBackend(data) {
+        try {
+          fetch('/api/report-error', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          }).catch(function() {});
+        } catch (e) {}
+      }
+
+      window.addEventListener('error', function(e) {
+        var message = (e.message || '').toLowerCase();
+        var errorMessage = (e.error && e.error.message ? e.error.message : '').toLowerCase();
+        var filename = (e.filename || '').toLowerCase();
+
+        // Safe filtering for known cross-origin / extension / parent wrapper non-app scripting errors
+        if (
+          message === '' ||
+          message.indexOf('script error') !== -1 ||
+          errorMessage.indexOf('script error') !== -1 ||
+          filename === '' ||
+          filename === 'unknown' ||
+          filename.indexOf('extension') !== -1 ||
+          filename.indexOf('chrome-extension') !== -1 ||
+          filename.indexOf('safari-extension') !== -1 ||
+          filename.indexOf('moz-extension') !== -1 ||
+          (!e.filename && !e.error)
+        ) {
+          return;
+        }
+
+        console.error('Captured live runtime error:', e.error || e.message);
+        
+        var payload = {
+          type: 'error',
+          message: e.message || 'Unknown message',
+          filename: e.filename || 'unknown',
+          lineno: e.lineno,
+          colno: e.colno,
+          stack: e.error ? (e.error.stack || e.error.message) : null
+        };
+        reportErrorToBackend(payload);
+      });
+
+      window.addEventListener('unhandledrejection', function(e) {
+        var reasonMessage = e.reason ? (e.reason.message || String(e.reason)) : '';
+        var reasonLower = reasonMessage.toLowerCase();
+        
+        // Gracefully ignore harmless Vite client, extension triggers, and script errors
+        if (
+          !reasonMessage ||
+          reasonLower.indexOf('script error') !== -1 ||
+          reasonLower.indexOf('websocket closed without opened') !== -1 || 
+          reasonLower.indexOf('vite') !== -1 ||
+          reasonLower.indexOf('extension') !== -1
+        ) {
+          return;
+        }
+
+        console.error('Captured unhandled rejection:', e.reason);
+
+        var payload = {
+          type: 'unhandledrejection',
+          message: reasonMessage || 'Unknown promise rejection',
+          stack: e.reason && e.reason.stack ? e.reason.stack : null
+        };
+        reportErrorToBackend(payload);
+      });
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
