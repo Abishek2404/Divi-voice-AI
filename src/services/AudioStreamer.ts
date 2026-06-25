@@ -17,6 +17,7 @@ export class AudioStreamer {
   // Audio playing sync
   private nextPlaybackTime: number = 0;
   private activeSources: AudioBufferSourceNode[] = [];
+  private leftoverByte: number | null = null;
 
   constructor() {}
 
@@ -37,8 +38,8 @@ export class AudioStreamer {
         },
       });
 
-      // Initialize input AudioContext using hardware properties
-      this.inputAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      // Initialize input AudioContext using hardware properties directly at 16kHz to avoid manual resampling
+      this.inputAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
 
       this.inputAnalyser = this.inputAudioCtx.createAnalyser();
       this.inputAnalyser.fftSize = 256;
@@ -57,9 +58,7 @@ export class AudioStreamer {
           const outputBuffer = event.outputBuffer.getChannelData(0);
           outputBuffer.fill(0);
 
-          const currentSampleRate = event.inputBuffer.sampleRate || (this.inputAudioCtx ? this.inputAudioCtx.sampleRate : 16000);
-          const resampledFloats = this.resample(floatSamples, currentSampleRate, 16000);
-          const pcmBuffer = this.floatTo16BitPCM(resampledFloats);
+          const pcmBuffer = this.floatTo16BitPCM(floatSamples);
           const base64PCM = this.arrayBufferToBase64(pcmBuffer);
           onAudioChunk(base64PCM);
         } catch (e) {
@@ -153,15 +152,28 @@ export class AudioStreamer {
 
     try {
       const binary = window.atob(base64PCM);
-      const len = binary.length;
+      let len = binary.length;
       
-      // Explicitly decode as Little Endian 16-bit linear PCM, robustly guarding against odd byte lengths
-      const numSamples = Math.floor(len / 2);
+      const hasLeftover = this.leftoverByte !== null;
+      const totalBytes = len + (hasLeftover ? 1 : 0);
+      const numSamples = Math.floor(totalBytes / 2);
+      
       const float32 = new Float32Array(numSamples);
-      const dataView = new DataView(new ArrayBuffer(len));
+      const dataView = new DataView(new ArrayBuffer(totalBytes));
+      
+      let writeOffset = 0;
+      if (hasLeftover) {
+        dataView.setUint8(0, this.leftoverByte!);
+        writeOffset = 1;
+        this.leftoverByte = null;
+      }
       
       for (let i = 0; i < len; i++) {
-        dataView.setUint8(i, binary.charCodeAt(i));
+        dataView.setUint8(writeOffset + i, binary.charCodeAt(i));
+      }
+      
+      if (totalBytes % 2 !== 0) {
+        this.leftoverByte = dataView.getUint8(totalBytes - 1);
       }
       
       for (let i = 0; i < numSamples; i++) {
@@ -169,10 +181,9 @@ export class AudioStreamer {
         float32[i] = val / 32768.0;
       }
 
-      // Resample the 24kHz PCM stream from Gemini to the browser's native AudioContext sample rate
-      const resampledFloats = this.resample(float32, 24000, ctx.sampleRate);
-      const audioBuffer = ctx.createBuffer(1, resampledFloats.length, ctx.sampleRate);
-      audioBuffer.getChannelData(0).set(resampledFloats);
+      // Web Audio API natively handles resampling, so we use 24000Hz directly
+      const audioBuffer = ctx.createBuffer(1, numSamples, 24000);
+      audioBuffer.getChannelData(0).set(float32);
 
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
@@ -182,9 +193,10 @@ export class AudioStreamer {
       analyser.connect(ctx.destination);
 
       const now = ctx.currentTime;
-      // Add a tiny safety scheduling advance to prevent hardware drops, crackling, or overlapping gaps
-      if (this.nextPlaybackTime < now + 0.04) {
-        this.nextPlaybackTime = now + 0.04;
+      // If we fall behind (buffer underflow), push start time slightly forward to create a jitter buffer
+      // This prevents constant stuttering and crackling when chunks arrive just-in-time
+      if (this.nextPlaybackTime < now) {
+        this.nextPlaybackTime = now + 0.2; // 200ms jitter buffer
       }
 
       source.start(this.nextPlaybackTime);
@@ -205,6 +217,11 @@ export class AudioStreamer {
     }
   }
 
+  public getTimeUntilPlaybackEnds(): number {
+    if (!this.outputAudioCtx) return 0;
+    return Math.max(0, this.nextPlaybackTime - this.outputAudioCtx.currentTime);
+  }
+
   /**
    * Stops current voice playback and flushes scheduled audio segments instantly.
    */
@@ -215,6 +232,7 @@ export class AudioStreamer {
       } catch (e) {}
     });
     this.activeSources = [];
+    this.leftoverByte = null;
     if (this.outputAudioCtx) {
       this.nextPlaybackTime = this.outputAudioCtx.currentTime;
     }

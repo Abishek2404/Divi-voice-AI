@@ -346,8 +346,8 @@ async function startServer() {
               prebuiltVoiceConfig: { voiceName: "Kore" } 
             },
           },
-          systemInstruction: customSystemInstruction,
-          tools: toolDeclarations as any[],
+          systemInstruction: { parts: [{ text: customSystemInstruction }] } as any,
+          tools: [{ functionDeclarations: toolDeclarations.map(t => { const { type, ...rest } = t as any; return rest; }) as any[] }],
         },
         callbacks: {
           onmessage: async (message: any) => {
@@ -358,12 +358,21 @@ async function startServer() {
               if (functionCalls) {
                 const functionResponses = [];
                 for (const call of functionCalls) {
-                  const result = await ToolExecutor.execute(call.name, call.args || call.arguments);
-                  functionResponses.push({
-                    id: call.id,
-                    name: call.name,
-                    response: result,
-                  });
+                  try {
+                    const result = await ToolExecutor.execute(call.name, call.args || call.arguments);
+                    functionResponses.push({
+                      id: call.id,
+                      name: call.name,
+                      response: result,
+                    });
+                  } catch (e: any) {
+                    console.error("Tool execution error:", e);
+                    functionResponses.push({
+                      id: call.id,
+                      name: call.name,
+                      response: { error: e.message }
+                    });
+                  }
                 }
                 if (session) {
                   session.sendToolResponse({ functionResponses });
@@ -408,8 +417,8 @@ async function startServer() {
               }));
             }
           },
-          onclose: () => {
-            console.log("Gemini Live session closed internally");
+          onclose: (e) => {
+            console.log("Gemini Live session closed internally", e);
             if (!isClosed) {
               clientWs.send(JSON.stringify({ type: "closed" }));
               clientWs.close();
@@ -480,8 +489,8 @@ async function startServer() {
           // Pass the raw 16kHz PCM audio chunk safely to Gemini
           session.sendRealtimeInput({
             audio: {
-              data: msg.data,
-              mimeType: "audio/pcm;rate=16000"
+              mimeType: "audio/pcm;rate=16000",
+              data: msg.data
             }
           });
         }
@@ -529,7 +538,7 @@ async function startServer() {
       server: { 
         middlewareMode: true,
         cors: true,
-        hmr: { server },
+        hmr: false,
       },
       appType: "spa",
     });

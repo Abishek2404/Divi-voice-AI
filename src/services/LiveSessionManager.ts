@@ -15,6 +15,9 @@ export class LiveSessionManager {
   private lastInputTime: number = 0;
   private audioEmptyTimeout: NodeJS.Timeout | null = null;
   private isSpeaking: boolean = false;
+  private lastIdToken?: string;
+  private isIntentionallyDisconnected: boolean = false;
+  private reconnectAttempts: number = 0;
 
   constructor() {
     this.audioStreamer = new AudioStreamer();
@@ -25,7 +28,10 @@ export class LiveSessionManager {
    */
   public async connect(idToken?: string): Promise<void> {
     const store = useAssistantStore.getState();
-    if (store.state !== AssistantState.DISCONNECTED) return;
+    if (store.state !== AssistantState.DISCONNECTED && store.state !== AssistantState.CONNECTING) return;
+    
+    this.isIntentionallyDisconnected = false;
+    this.lastIdToken = idToken || this.lastIdToken;
 
     store.setState(AssistantState.CONNECTING);
     store.setServerError(null);
@@ -77,6 +83,7 @@ export class LiveSessionManager {
 
           if (msg.type === "session_ready") {
             console.log("Gemini Live acknowledgement received! Setting up microphones...");
+            this.reconnectAttempts = 0; // reset reconnect attempts
             
             // Start audio streams
             this.audioStreamer.startPlayback();
@@ -90,6 +97,7 @@ export class LiveSessionManager {
           }
 
           else if (msg.type === "audio" && msg.data) {
+            (window as any).receivedAudio = true;
             // Cancel thinking transitions
             this.clearThinkingTimer();
             
@@ -115,6 +123,11 @@ export class LiveSessionManager {
             // If nothing is playing, return to listening
           }
 
+          else if (msg.type === "closed") {
+            console.log("Server indicated session closed.");
+            this.disconnect();
+          }
+
           else if (msg.type === "error") {
             console.error("Received server error feedback:", msg.message);
             useAssistantStore.getState().setServerError(msg.message);
@@ -129,7 +142,7 @@ export class LiveSessionManager {
       this.socket.onclose = (event) => {
         try {
           console.log(`Server connection closed. Code: ${event.code}`);
-          this.disconnect();
+          this.handleUnexpectedDisconnect();
         } catch (e) {
           console.error("Error in onclose handler:", e);
         }
@@ -139,7 +152,7 @@ export class LiveSessionManager {
         try {
           console.error("WebSocket transport error:", err);
           useAssistantStore.getState().setServerError("Unable to connect to Divi's server websocket feed.");
-          this.disconnect();
+          this.handleUnexpectedDisconnect();
         } catch (e) {
           console.error("Error in onerror handler:", e);
         }
@@ -165,15 +178,10 @@ export class LiveSessionManager {
     const vol = this.audioStreamer.getInputVolume();
     const now = Date.now();
 
-    if (vol > 12) { // Speech threshold
+    if (vol > 15) { // Speech threshold
       this.lastInputTime = now;
       
-      // If we were speaking, user speech interrupts us
-      if (this.isSpeaking) {
-        this.clearPlaybackQueue();
-        this.isSpeaking = false;
-        useAssistantStore.getState().setState(AssistantState.LISTENING);
-      } else if (useAssistantStore.getState().state === AssistantState.LISTENING) {
+      if (!this.isSpeaking && useAssistantStore.getState().state === AssistantState.LISTENING) {
         // Highlighting that the user is actively talking
         useAssistantStore.getState().setState(AssistantState.LISTENING);
       }
@@ -204,7 +212,9 @@ export class LiveSessionManager {
       clearTimeout(this.audioEmptyTimeout);
     }
 
-    // Since sample frames run continuously, if no new chunk arrives in 1.4s, assume speaking finished
+    const timeRemainingSeconds = this.audioStreamer.getTimeUntilPlaybackEnds();
+    const waitMs = Math.max(timeRemainingSeconds * 1000 + 200, 1400); // Wait until audio finishes + 200ms padding
+
     this.audioEmptyTimeout = setTimeout(() => {
       if (this.isSpeaking) {
         this.isSpeaking = false;
@@ -212,7 +222,7 @@ export class LiveSessionManager {
           useAssistantStore.getState().setState(AssistantState.LISTENING);
         }
       }
-    }, 1400);
+    }, waitMs);
   }
 
   private clearThinkingTimer(): void {
@@ -234,10 +244,40 @@ export class LiveSessionManager {
   }
 
   /**
+   * Automatically attempts to reconnect if the connection dropped unexpectedly.
+   */
+  private handleUnexpectedDisconnect(): void {
+    if (this.isIntentionallyDisconnected) return;
+    
+    console.log(`Unexpected disconnect. Attempting reconnect ${this.reconnectAttempts + 1}/5...`);
+    this.clearPlaybackQueue();
+    this.clearThinkingTimer();
+    this.isSpeaking = false;
+    
+    if (this.socket) {
+      try { this.socket.close(); } catch (e) {}
+      this.socket = null;
+    }
+    
+    if (this.reconnectAttempts < 5) {
+      this.reconnectAttempts++;
+      useAssistantStore.getState().setState(AssistantState.CONNECTING);
+      useAssistantStore.getState().setServerError("Connection lost. Reconnecting...");
+      setTimeout(() => {
+        this.connect(this.lastIdToken).catch(console.error);
+      }, 2000 * this.reconnectAttempts); // Exponential-ish backoff
+    } else {
+      useAssistantStore.getState().setServerError("Lost connection to server and failed to reconnect.");
+      this.disconnect();
+    }
+  }
+
+  /**
    * Tears down WebSocket session, stops hardware inputs/outputs.
    */
   public disconnect(): void {
     console.log("Disconnecting and cleaning up hardware/sessions...");
+    this.isIntentionallyDisconnected = true;
     this.clearPlaybackQueue();
     this.clearThinkingTimer();
     this.isSpeaking = false;

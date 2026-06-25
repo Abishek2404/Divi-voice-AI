@@ -31,7 +31,8 @@ import {
   Trash2,
   Edit,
   Plus,
-  Check
+  Check,
+  Mic
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useGeminiLive } from "./hooks/useGeminiLive";
@@ -42,7 +43,8 @@ import { StatusIndicator } from "./components/StatusIndicator";
 import { MicButton } from "./components/MicButton";
 import { AssistantState } from "./types";
 import { auth, googleAuthProvider } from "./lib/firebase";
-import { signInWithPopup, signOut, onAuthStateChanged, User } from "firebase/auth";
+import { signInWithPopup, signOut, onAuthStateChanged, User, browserPopupRedirectResolver } from "firebase/auth";
+import { useVoiceSearch } from "./hooks/useVoiceSearch";
 
 export default function App() {
   const {
@@ -93,6 +95,11 @@ export default function App() {
 
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Voice Search setup
+  const { isListening: isVoiceSearchListening, isSupported: isVoiceSearchSupported, toggleListening: toggleVoiceSearch } = useVoiceSearch((text) => {
+    setSearchQuery(text);
+  });
 
   const handleCreateMemory = async () => {
     if (!newKey.trim() || !newValue.trim() || !idToken) return;
@@ -301,18 +308,27 @@ export default function App() {
   };
 
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   const handleLogin = async () => {
+    if (isLoggingIn) return;
     try {
+      setIsLoggingIn(true);
       setAuthError(null);
-      await signInWithPopup(auth, googleAuthProvider);
+      await signInWithPopup(auth, googleAuthProvider, browserPopupRedirectResolver);
     } catch (err: any) {
       console.error("Popup Sign in rejected:", err);
-      if (err.code === "auth/unauthorized-domain") {
-        setAuthError("Domain not authorized in Firebase. Add this URL to Firebase Console > Authentication > Settings > Authorized domains.");
+      if (err.code === "auth/popup-blocked") {
+        setAuthError("Sign-in popup was blocked by your browser. Please allow popups or click 'Open App' in the top right to open in a new tab.");
+      } else if (err.code === "auth/unauthorized-domain") {
+        setAuthError(`Domain not authorized. Please add "${window.location.hostname}" to Firebase Console > Authentication > Settings > Authorized domains.`);
+      } else if (err.code === "auth/cancelled-popup-request") {
+        setAuthError("Sign in was cancelled. Please try again.");
       } else {
         setAuthError(err.message || "Failed to sign in. Check console for details.");
       }
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -417,9 +433,10 @@ export default function App() {
             <div className="flex flex-col items-end gap-2">
               <button
                 onClick={handleLogin}
-                className="px-5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 cursor-pointer z-20"
+                disabled={isLoggingIn}
+                className={`px-5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 z-20 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
-                Sign In with Google
+                {isLoggingIn ? 'Signing In...' : 'Sign In with Google'}
               </button>
               {authError && (
                 <div className="absolute top-16 right-6 z-50 max-w-xs bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] px-3 py-2 rounded-lg backdrop-blur-md shadow-lg">
@@ -875,8 +892,17 @@ export default function App() {
                               value={searchQuery}
                               onChange={(e) => setSearchQuery(e.target.value)}
                               placeholder="Search memories by key or value..."
-                              className="w-full pl-9 pr-4 py-1.5 bg-black/40 border border-white/5 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500/50"
+                              className="w-full pl-9 pr-8 py-1.5 bg-black/40 border border-white/5 rounded-xl text-xs text-slate-200 placeholder:text-slate-500 focus:outline-none focus:border-indigo-500/50"
                             />
+                            {isVoiceSearchSupported && (
+                              <button
+                                onClick={toggleVoiceSearch}
+                                className={`absolute right-2 top-2 ${isVoiceSearchListening ? 'text-red-400 animate-pulse' : 'text-slate-500 hover:text-indigo-400'} transition-colors`}
+                                title="Voice Search"
+                              >
+                                <Mic className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
 
