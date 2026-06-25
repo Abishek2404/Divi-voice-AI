@@ -260,7 +260,7 @@ export default function App() {
           const tokenStr = await user.getIdToken();
           setIdToken(tokenStr);
 
-          // Synchronize user profile database record in Cloud SQL
+          // Synchronize user profile database record in MongoDB
           await fetch(getApiUrl("/api/auth/sync"), {
             method: "POST",
             headers: {
@@ -551,7 +551,7 @@ export default function App() {
                       Divi Memory Vault 
                       <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-bounce" />
                     </h2>
-                    <p className="text-[10px] text-slate-500 font-mono">Durable recollections indexed inside asia-southeast1 PostgreSQL</p>
+                    <p className="text-[10px] text-slate-500 font-mono">Durable recollections indexed inside asia-southeast1 MongoDB</p>
                   </div>
                 </div>
 
@@ -620,7 +620,7 @@ export default function App() {
                             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Memory Search Tester</h3>
                           </div>
                           <p className="text-[10px] text-slate-500 font-sans leading-relaxed">
-                            Simulate vector embedding querying. Executes real-time cosine distance sorting on Drizzle/PostgreSQL database records.
+                            Simulate vector embedding querying. Executes real-time cosine distance sorting on MongoDB database records.
                           </p>
                           <div className="flex gap-2">
                             <input

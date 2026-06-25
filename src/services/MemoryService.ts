@@ -350,7 +350,6 @@ ${dialogueConcat}
           sessionId: Math.random().toString(36).substring(7),
           userId,
           summary: payload.summary,
-          timestamp: new Date()
         });
         await convo.save();
         console.log(`Stored session summary: "${payload.summary}"`);

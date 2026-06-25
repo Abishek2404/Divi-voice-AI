@@ -1,6 +1,6 @@
 {
   "name": "Divi AI Assistant",
-  "description": "Real-time voice-to-voice AI companion with charming personality, witty humor, and low latency responses.",
+  "description": "Real-time voice-to-voice AI companion and Personal Agent capable of controlling websites through Playwright.",
   "requestFramePermissions": [
     "microphone"
   ],

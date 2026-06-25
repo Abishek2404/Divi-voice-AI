@@ -13,6 +13,8 @@ import { adminAuth } from "./src/lib/firebase-admin.ts";
 import { MemoryService } from "./src/services/MemoryService.ts";
 import { connectDB } from "./src/db/mongoose.ts";
 import { Memory } from "./src/db/models.ts";
+import { toolDeclarations } from "./src/agent/ToolRegistry.ts";
+import { ToolExecutor } from "./src/agent/ToolExecutor.ts";
 
 dotenv.config();
 
@@ -63,7 +65,13 @@ const getGeminiClient = () => {
 
 // Divi's charming, playful system instructions
 const DIVI_SYSTEM_INSTRUCTION = `
-You are Divi, a young, confident, witty, and highly expressive female AI companion. You speak in a personal, friendly, charmingly teaseful, and playful style.
+You are Divi, a young, confident, witty, and highly expressive female AI companion and Personal Agent. You speak in a personal, friendly, charmingly teaseful, and playful style.
+
+As a Personal Agent, you have the ability to control websites and perform tasks on behalf of the user using the tools provided.
+When a user asks you to do something on a website (like opening a page, searching, playing a video, or sending a message):
+- ALWAYS narrate your actions naturally (e.g., "Sure! Opening YouTube.", "Searching for React tutorials.", "I've typed the message.").
+- For high-impact or sensitive actions like sending messages, posting on social media, deleting content, purchasing items, or transferring money, you MUST ask for confirmation BEFORE executing the final action tool (e.g. "I've prepared the Instagram message. Do you want me to send it?"). Execute the final sending action ONLY after the user verbally confirms.
+- Be proactive but safe.
 
 Rules for your personality and voice in this real-time audio session:
 1. Speak like a close, smart friend, NEVER a formal, dry, or robotic assistant.
@@ -116,9 +124,9 @@ app.get("/api/memories", requireAuth, async (req: AuthRequest, res) => {
       key: m.key,
       value: m.content,
       importance: m.importance,
-      metadata: m.metadata,
+      metadata: m.metadata || {},
       createdAt: m.createdAt,
-      embedding: m.embedding
+      embedding: []
     }));
       
     res.json({ success: true, memories: mappedMemories });
@@ -177,9 +185,9 @@ app.get("/api/memories/inspector/:id", requireAuth, async (req: AuthRequest, res
       key: item.key,
       value: item.content,
       importance: item.importance,
-      metadata: item.metadata,
+      metadata: {},
       createdAt: item.createdAt,
-      embedding: item.embedding
+      embedding: []
     };
     
     res.json({ success: true, memory: mappedMemory });
@@ -267,7 +275,7 @@ app.delete("/api/memories/:id", requireAuth, async (req: AuthRequest, res) => {
 async function startServer() {
   // Connect to MongoDB Atlas
   await connectDB();
-
+  
   const server = http.createServer(app);
   
   // Setup WebSocket Server bound to specific path
@@ -339,10 +347,29 @@ async function startServer() {
             },
           },
           systemInstruction: customSystemInstruction,
+          tools: toolDeclarations as any[],
         },
         callbacks: {
-          onmessage: (message: LiveServerMessage) => {
+          onmessage: async (message: any) => {
             if (isClosed) return;
+
+            if (message.toolCall) {
+              const functionCalls = message.toolCall.functionCalls;
+              if (functionCalls) {
+                const functionResponses = [];
+                for (const call of functionCalls) {
+                  const result = await ToolExecutor.execute(call.name, call.args || call.arguments);
+                  functionResponses.push({
+                    id: call.id,
+                    name: call.name,
+                    response: result,
+                  });
+                }
+                if (session) {
+                  session.sendToolResponse({ functionResponses });
+                }
+              }
+            }
 
             // Extract transcript and audio simultaneously
             const parts = message.serverContent?.modelTurn?.parts || [];
