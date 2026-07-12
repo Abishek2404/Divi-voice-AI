@@ -11,12 +11,13 @@ export async function connectDB() {
 
   try {
     if (!process.env.MONGODB_URI) {
-      console.warn("MONGODB_URI is missing, using local default. This will fail in production.");
+      console.warn("MONGODB_URI is missing. Server will continue with in-memory fallbacks.");
+      return;
     }
     await mongoose.connect(uri);
     console.log("MongoDB connected successfully");
-  } catch (error) {
-    console.error("MongoDB connection failed:", error);
-    throw error;
+  } catch (error: any) {
+    console.error("MongoDB connection failed, continuing with in-memory fallback:", error?.message || String(error));
+    // Do not throw; let the server activate and run with in-memory fallbacks gracefully.
   }
 }

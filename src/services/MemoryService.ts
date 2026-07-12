@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
-import { User, Memory, Conversation } from '../db/models.ts';
+import mongoose from 'mongoose';
+import { User, Memory, Conversation, ConversationSummary } from '../db/models.ts';
 
 const EXTRACTION_MODEL = "gemini-2.5-flash"; // Valid free-tier model
 
@@ -13,6 +14,15 @@ export interface MemoryItem {
 
 export class MemoryService {
   private static aiClient: GoogleGenAI | null = null;
+  
+  // In-memory fallback stores for environments with no MongoDB connection
+  private static inMemoryUsers = new Map<string, any>();
+  private static inMemoryMemories = new Map<string, any[]>();
+  private static inMemoryConversations = new Map<string, any[]>();
+
+  private static isDbConnected(): boolean {
+    return typeof mongoose !== 'undefined' && mongoose.connection && mongoose.connection.readyState === 1;
+  }
 
   private static getAI(): GoogleGenAI {
     if (!this.aiClient) {
@@ -34,12 +44,15 @@ export class MemoryService {
       try {
         return await fn();
       } catch (err: any) {
+        const errMsg = err?.message || String(err);
+        const isQuotaExceeded = errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota");
+        
         attempt++;
-        if (attempt >= maxRetries) {
+        if (attempt >= maxRetries || isQuotaExceeded) {
           throw err;
         }
         const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 1000;
-        console.warn(`[Cognition Retry] Temporary Gemini load or rate limit (attempt ${attempt}/${maxRetries}). Retrying in ${Math.round(delay)}ms... Error:`, err?.message || err);
+        console.warn(`[Cognition Retry] Temporary Gemini load or rate limit (attempt ${attempt}/${maxRetries}). Retrying in ${Math.round(delay)}ms... Error:`, errMsg);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
@@ -49,6 +62,14 @@ export class MemoryService {
    * Safe user synchronization.
    */
   public static async getOrCreateUser(uid: string, email: string) {
+    if (!this.isDbConnected()) {
+      let user = this.inMemoryUsers.get(uid);
+      if (!user) {
+        user = { userId: uid, email, displayName: email.split('@')[0], createdAt: new Date() };
+        this.inMemoryUsers.set(uid, user);
+      }
+      return user;
+    }
     try {
       let user = await User.findOne({ userId: uid });
       if (user) {
@@ -59,7 +80,7 @@ export class MemoryService {
       await user.save();
       return user;
     } catch (error) {
-      console.error("Failed to register/get user in database:", error);
+      console.error("Failed to register/get user in database:", error?.message || String(error));
       throw new Error("Durable database user integration failed.", { cause: error });
     }
   }
@@ -67,28 +88,58 @@ export class MemoryService {
   /**
    * Saves a memory to the database (and supports older signature as well).
    */
+  /**
+   * Saves a memory to the database (and supports older signature as well).
+   */
   public static async saveMemory(userId: string, keyOrItem: string | MemoryItem, value?: string, category: string = "fact"): Promise<void> {
-    try {
-      let finalKey = "";
-      let finalValue = "";
-      let finalCategory = category;
+    let finalKey = "";
+    let finalValue = "";
+    let finalCategory = category;
 
-      if (typeof keyOrItem === "object") {
-        finalKey = (keyOrItem.key || "").trim();
-        finalValue = (keyOrItem.value || "").trim();
-        finalCategory = keyOrItem.type || "fact";
+    if (typeof keyOrItem === "object") {
+      finalKey = (keyOrItem.key || "").trim();
+      finalValue = (keyOrItem.value || "").trim();
+      finalCategory = keyOrItem.type || "fact";
+    } else {
+      finalKey = keyOrItem.trim();
+      finalValue = (value || "").trim();
+    }
+
+    if (!finalKey) {
+      throw new Error("Memory key is required");
+    }
+
+    const cleanKey = finalKey.toLowerCase().replace(/\s+/g, '_');
+
+    if (!this.isDbConnected()) {
+      let userMemories = this.inMemoryMemories.get(userId);
+      if (!userMemories) {
+        userMemories = [];
+        this.inMemoryMemories.set(userId, userMemories);
+      }
+      const existingIdx = userMemories.findIndex(m => m.key === cleanKey);
+      if (existingIdx !== -1) {
+        userMemories[existingIdx].value = finalValue;
+        userMemories[existingIdx].category = finalCategory;
+        userMemories[existingIdx].updatedAt = new Date();
+        console.log(`[IN-MEMORY UPDATE] Key: "${cleanKey}", Value: "${finalValue}" for User: ${userId}`);
       } else {
-        finalKey = keyOrItem.trim();
-        finalValue = (value || "").trim();
+        userMemories.push({
+          userId,
+          key: cleanKey,
+          value: finalValue,
+          content: finalValue,
+          category: finalCategory,
+          importance: 10,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+        console.log(`[IN-MEMORY SAVE] Key: "${cleanKey}", Value: "${finalValue}" for User: ${userId}`);
       }
+      return;
+    }
 
-      if (!finalKey) {
-        throw new Error("Memory key is required");
-      }
-
-      // Normalize key (lowercase, snake_case)
-      const cleanKey = finalKey.toLowerCase().replace(/\s+/g, '_');
-
+    try {
       // Check for exact key duplication for this user
       const existing = await Memory.findOne({ userId, key: cleanKey });
 
@@ -111,7 +162,7 @@ export class MemoryService {
         console.log(`[MEMORY SAVED] Key: "${cleanKey}", Value: "${finalValue}" for User: ${userId}`);
       }
     } catch (error) {
-      console.error(`Failed to store memory item for user ${userId}:`, error);
+      console.error(`Failed to store memory item for user ${userId}:`, error?.message || String(error));
       throw new Error("Durable database memory storage failed.", { cause: error });
     }
   }
@@ -120,8 +171,18 @@ export class MemoryService {
    * Retrieves a specific memory by key.
    */
   public static async getMemory(userId: string, key: string): Promise<string | null> {
+    const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!this.isDbConnected()) {
+      const userMemories = this.inMemoryMemories.get(userId) || [];
+      const item = userMemories.find(m => m.key === cleanKey);
+      if (item) {
+        console.log(`[IN-MEMORY LOADED] Key: "${cleanKey}", Value: "${item.value}" for User: ${userId}`);
+        return item.value;
+      }
+      return null;
+    }
+
     try {
-      const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
       const item = await Memory.findOne({ userId, key: cleanKey });
       if (item) {
         console.log(`[MEMORY LOADED] Key: "${cleanKey}", Value: "${item.value}" for User: ${userId}`);
@@ -129,7 +190,7 @@ export class MemoryService {
       }
       return null;
     } catch (error) {
-      console.error(`Failed to getMemory for user ${userId}:`, error);
+      console.error(`Failed to getMemory for user ${userId}:`, error?.message || String(error));
       return null;
     }
   }
@@ -138,12 +199,18 @@ export class MemoryService {
    * Retrieves all memories for a user.
    */
   public static async getAllMemories(userId: string): Promise<any[]> {
+    if (!this.isDbConnected()) {
+      const memories = this.inMemoryMemories.get(userId) || [];
+      console.log(`[IN-MEMORY LOADED] Loaded ${memories.length} memories for User: ${userId}`);
+      return [...memories].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    }
+
     try {
       const items = await Memory.find({ userId }).sort({ createdAt: -1 });
       console.log(`[MEMORY LOADED] Loaded ${items.length} memories for User: ${userId}`);
       return items;
     } catch (error) {
-      console.error(`Failed to getAllMemories for user ${userId}:`, error);
+      console.error(`Failed to getAllMemories for user ${userId}:`, error?.message || String(error));
       return [];
     }
   }
@@ -152,8 +219,13 @@ export class MemoryService {
    * Updates a specific memory key.
    */
   public static async updateMemory(userId: string, key: string, value: string): Promise<void> {
+    const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!this.isDbConnected()) {
+      await this.saveMemory(userId, cleanKey, value);
+      return;
+    }
+
     try {
-      const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
       const existing = await Memory.findOne({ userId, key: cleanKey });
       if (existing) {
         existing.value = value;
@@ -164,7 +236,7 @@ export class MemoryService {
         await this.saveMemory(userId, cleanKey, value);
       }
     } catch (error) {
-      console.error(`Failed to updateMemory for user ${userId}:`, error);
+      console.error(`Failed to updateMemory for user ${userId}:`, error?.message || String(error));
     }
   }
 
@@ -172,14 +244,24 @@ export class MemoryService {
    * Deletes a specific memory key.
    */
   public static async deleteMemory(userId: string, key: string): Promise<void> {
+    const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!this.isDbConnected()) {
+      const userMemories = this.inMemoryMemories.get(userId) || [];
+      const index = userMemories.findIndex(m => m.key === cleanKey);
+      if (index !== -1) {
+        userMemories.splice(index, 1);
+        console.log(`[IN-MEMORY DELETED] Key: "${cleanKey}" for User: ${userId}`);
+      }
+      return;
+    }
+
     try {
-      const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_');
       const match = await Memory.findOneAndDelete({ userId, key: cleanKey });
       if (match) {
         console.log(`[MEMORY DELETED] Key: "${cleanKey}" for User: ${userId}`);
       }
     } catch (error) {
-      console.error(`Failed to deleteMemory for user ${userId}:`, error);
+      console.error(`Failed to deleteMemory for user ${userId}:`, error?.message || String(error));
     }
   }
 
@@ -187,9 +269,28 @@ export class MemoryService {
    * Simple standard database search (fallback or exact matching) to support UI.
    */
   public static async searchRelatedMemories(userId: string, query: string, limit: number = 5): Promise<any[]> {
+    const cleanQuery = query.toLowerCase().trim();
+    if (!this.isDbConnected()) {
+      const userMemories = this.inMemoryMemories.get(userId) || [];
+      const matched = userMemories.filter(m => 
+        m.key.toLowerCase().includes(cleanQuery) ||
+        m.value.toLowerCase().includes(cleanQuery) ||
+        m.category.toLowerCase().includes(cleanQuery)
+      ).slice(0, limit);
+
+      return matched.map(m => ({
+        id: m.key,
+        type: m.category,
+        key: m.key,
+        value: m.value,
+        importance: m.importance || 10,
+        createdAt: m.createdAt,
+        distance: 0
+      }));
+    }
+
     try {
       console.log(`[MEMORY LOADED] Searching memories containing "${query}" for User: ${userId}`);
-      const cleanQuery = query.toLowerCase().trim();
       
       const matched = await Memory.find({
         userId,
@@ -210,7 +311,7 @@ export class MemoryService {
         distance: 0 // Mock distance for compatibility
       }));
     } catch (error) {
-      console.error("Failed to query memories:", error);
+      console.error("Failed to query memories:", error?.message || String(error));
       return [];
     }
   }
@@ -245,7 +346,7 @@ export class MemoryService {
 
       return blockParts.join("\n");
     } catch (error) {
-      console.error(`Failed to construct memory context block for user ${userId}:`, error);
+      console.error(`Failed to construct memory context block for user ${userId}:`, error?.message || String(error));
       return "";
     }
   }
@@ -261,7 +362,7 @@ export class MemoryService {
     }
 
     const ai = this.getAI();
-    const dialogueConcat = textDialogLog.join("\n");
+    const dialogueConcat = textDialogLog.slice(-50).join("\n");
 
     try {
       const responseSchema: Schema = {
@@ -315,7 +416,7 @@ ${dialogueConcat}
 """
 
 ### TASKS:
-1. Generate a beautiful, high-level summary of this convo.
+1. Generate a high-level summary of this convo containing: Current topics being discussed, Key decisions or facts, and the Current emotional state of the user.
 2. Review the dialogue for new identity parameters (age, name, birthday, location), preferences/likes (favorite foods, favorite anime, movies, colors), projects/work (project names like EduFlow), family/relationships, or goals.
 3. IMPORTANT CONTEXT: The log only contains Divi's verbal responses and placeholders '[User spoke vocal stream]' for the user's speech. You MUST INFER what the user said based on Divi's responses! (e.g. if Divi says "Oh wow, Solo Leveling is a cool anime to have as a favorite!", you infer the key "favorite_anime" = "Solo Leveling").
 4. Always extract specific keys for standard details:
@@ -346,13 +447,28 @@ ${dialogueConcat}
 
       // Persist the Session Summary
       if (payload.summary) {
-        const convo = new Conversation({
-          sessionId: Math.random().toString(36).substring(7),
-          userId,
-          summary: payload.summary,
-        });
-        await convo.save();
-        console.log(`Stored session summary: "${payload.summary}"`);
+        if (!this.isDbConnected()) {
+          let userConvos = this.inMemoryConversations.get(userId);
+          if (!userConvos) {
+            userConvos = [];
+            this.inMemoryConversations.set(userId, userConvos);
+          }
+          userConvos.push({
+            sessionId: Math.random().toString(36).substring(7),
+            userId,
+            summary: payload.summary,
+            createdAt: new Date()
+          });
+          console.log(`Stored in-memory session summary: "${payload.summary}"`);
+        } else {
+          const convo = new ConversationSummary({
+            sessionId: Math.random().toString(36).substring(7),
+            userId,
+            summary: payload.summary,
+          });
+          await convo.save();
+          console.log(`Stored session summary: "${payload.summary}"`);
+        }
       }
 
       // Process Recollected Facts
@@ -366,8 +482,36 @@ ${dialogueConcat}
         }
       }
 
-    } catch (err) {
-      console.error("Failed to execute background Memory Extraction pipeline:", err);
+    } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      if (errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota")) {
+        console.warn("[Memory Extraction] Background cognitive extraction pipeline paused due to Gemini API free-tier quota limitations. We will sync this session's recollections on the next user action.");
+      } else {
+        console.error("Failed to execute background Memory Extraction pipeline:", errMsg);
+      }
+    }
+  }
+
+  public static async getRecentMessages(userId: string, limit: number = 30): Promise<string> {
+    if (!this.isDbConnected()) return "";
+    try {
+      const messages = await Conversation.find({ userId }).sort({ timestamp: -1 }).limit(limit);
+      if (messages.length === 0) return "";
+      return messages.reverse().map(m => `${m.role === 'user' ? 'User' : 'Divi'}: ${m.message}`).join("\n");
+    } catch (e) {
+      console.error("Failed to load recent messages:", e);
+      return "";
+    }
+  }
+
+  public static async getLatestSummary(userId: string): Promise<string> {
+    if (!this.isDbConnected()) return "";
+    try {
+      const summary = await ConversationSummary.findOne({ userId }).sort({ createdAt: -1 });
+      return summary ? summary.summary : "";
+    } catch (e) {
+      console.error("Failed to load latest summary:", e);
+      return "";
     }
   }
 }

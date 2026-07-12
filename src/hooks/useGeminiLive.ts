@@ -44,6 +44,10 @@ export function useGeminiLive() {
     liveSessionInstance.disconnect();
   };
 
+  const sendBrowserInteraction = (action: string, payload: any) => {
+    liveSessionInstance.sendBrowserInteraction(action, payload);
+  };
+
   return {
     state,
     isMuted,
@@ -54,5 +58,6 @@ export function useGeminiLive() {
     toggleMute,
     connect,
     disconnect,
+    sendBrowserInteraction,
   };
 }

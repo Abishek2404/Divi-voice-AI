@@ -62,7 +62,7 @@ export class AudioStreamer {
           const base64PCM = this.arrayBufferToBase64(pcmBuffer);
           onAudioChunk(base64PCM);
         } catch (e) {
-          console.error("Error in onaudioprocess callback:", e);
+          console.error("Error in onaudioprocess callback:", e?.message || String(e));
         }
       };
 
@@ -73,7 +73,7 @@ export class AudioStreamer {
         await this.inputAudioCtx.resume();
       }
     } catch (err) {
-      console.error("AudioStreamer failed to initialize recording session:", err);
+      console.error("AudioStreamer failed to initialize recording session:", err?.message || String(err));
       throw err;
     }
   }
@@ -209,11 +209,11 @@ export class AudioStreamer {
         try {
           this.activeSources = this.activeSources.filter((s) => s !== source);
         } catch (e) {
-          console.error("Error in onended handler:", e);
+          console.error("Error in onended handler:", e?.message || String(e));
         }
       };
     } catch (err) {
-      console.error("AudioStreamer failed to play incoming sound segment:", err);
+      console.error("AudioStreamer failed to play incoming sound segment:", err?.message || String(err));
     }
   }
 

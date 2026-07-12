@@ -18,6 +18,15 @@ export interface AssistantStoreState {
   serverError: string | null;
   isMuted: boolean;
   isPermissionGranted: boolean;
+  voice: string;
+  language: string;
+  orbTheme: string;
+  highParticleDensity: boolean;
+  visualizationStyle: "bars" | "circular" | "linear";
+  
+  // Browser Agent State
+  browserFrame: string | null;
+  browserCurrentAction: string | null;
   
   // Actions
   setState: (state: AssistantState) => void;
@@ -25,5 +34,12 @@ export interface AssistantStoreState {
   setServerError: (error: string | null) => void;
   setMuted: (muted: boolean) => void;
   setPermissionGranted: (granted: boolean) => void;
+  setVoice: (voice: string) => void;
+  setLanguage: (lang: string) => void;
+  setOrbTheme: (theme: string) => void;
+  setHighParticleDensity: (dense: boolean) => void;
+  setVisualizationStyle: (style: "bars" | "circular" | "linear") => void;
+  setBrowserFrame: (frame: string | null) => void;
+  setBrowserCurrentAction: (action: string | null) => void;
   reset: () => void;
 }

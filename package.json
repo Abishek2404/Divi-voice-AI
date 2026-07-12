@@ -4,11 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 tsx server.ts > server.log 2>&1",
+    "dev": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "postinstall": "cross-env PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

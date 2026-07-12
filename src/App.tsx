@@ -32,7 +32,10 @@ import {
   Edit,
   Plus,
   Check,
-  Mic
+  Mic,
+  Maximize2,
+  Minimize2,
+  Settings
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import { useGeminiLive } from "./hooks/useGeminiLive";
@@ -45,6 +48,7 @@ import { AssistantState } from "./types";
 import { auth, googleAuthProvider } from "./lib/firebase";
 import { signInWithPopup, signOut, onAuthStateChanged, User, browserPopupRedirectResolver } from "firebase/auth";
 import { useVoiceSearch } from "./hooks/useVoiceSearch";
+import { useAssistantStore } from "./store";
 
 export default function App() {
   const {
@@ -56,8 +60,10 @@ export default function App() {
     toggleMute,
     connect,
     disconnect,
+    sendBrowserInteraction,
   } = useGeminiLive();
 
+  const { browserFrame, browserCurrentAction, voice, setVoice, language, setLanguage, orbTheme, setOrbTheme, highParticleDensity, setHighParticleDensity, visualizationStyle, setVisualizationStyle } = useAssistantStore();
   const isDisconnected = state === AssistantState.DISCONNECTED;
 
   // Authentication & Memory States
@@ -65,6 +71,7 @@ export default function App() {
   const [idToken, setIdToken] = useState<string | null>(null);
   const [memoriesList, setMemoriesList] = useState<any[]>([]);
   const [showMemoriesModal, setShowMemoriesModal] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<string>("all");
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
@@ -95,6 +102,11 @@ export default function App() {
 
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Mobile virtual keyboard typing helper text
+  const [mobileInputText, setMobileInputText] = useState<string>("");
+  const [isBrowserFullView, setIsBrowserFullView] = useState<boolean>(false);
+  const [layoutMode, setLayoutMode] = useState<"split" | "divi" | "workspace">("split");
 
   // Voice Search setup
   const { isListening: isVoiceSearchListening, isSupported: isVoiceSearchSupported, toggleListening: toggleVoiceSearch } = useVoiceSearch((text) => {
@@ -127,7 +139,7 @@ export default function App() {
         setMemoryError(data.error || "Failed to create memory");
       }
     } catch (e: any) {
-      console.error("Create memory failed:", e);
+      console.error("Create memory failed:", e?.message || String(e));
       setMemoryError("Create memory failed due to a network or server error.");
     } finally {
       setIsCreating(false);
@@ -159,7 +171,7 @@ export default function App() {
         setMemoryError(data.error || "Failed to update memory");
       }
     } catch (e: any) {
-      console.error("Update memory failed:", e);
+      console.error("Update memory failed:", e?.message || String(e));
       setMemoryError("Update memory failed due to a network or server error.");
     } finally {
       setIsEditingSaving(false);
@@ -183,7 +195,7 @@ export default function App() {
         setMemoryError(data.error || "Failed to delete memory");
       }
     } catch (e: any) {
-      console.error("Delete memory failed:", e);
+      console.error("Delete memory failed:", e?.message || String(e));
       setMemoryError("Delete memory failed due to a network or server error.");
     }
   };
@@ -259,7 +271,22 @@ export default function App() {
 
   // Authenticate user state observer
   useEffect(() => {
+    // Check if there is a cached demo session on mount
+    const cachedUserJson = localStorage.getItem("divi_demo_user");
+    const cachedToken = localStorage.getItem("divi_demo_token");
+    if (cachedUserJson && cachedToken) {
+      const parsed = JSON.parse(cachedUserJson);
+      setCurrentUser(parsed);
+      setIdToken(cachedToken);
+      loadUserMemories(cachedToken);
+      return;
+    }
+
     return onAuthStateChanged(auth, async (user) => {
+      // If we currently have a demo session, ignore Firebase auth changes until user signs out
+      if (localStorage.getItem("divi_demo_user")) {
+        return;
+      }
       setCurrentUser(user);
       if (user) {
         setIsSyncing(true);
@@ -279,7 +306,7 @@ export default function App() {
           // Fetch user recollections from Postgres
           await loadUserMemories(tokenStr);
         } catch (err) {
-          console.error("Critical Profile sync error:", err);
+          console.error("Critical Profile sync error:", err?.message || String(err));
         } finally {
           setIsSyncing(false);
         }
@@ -317,7 +344,7 @@ export default function App() {
       setAuthError(null);
       await signInWithPopup(auth, googleAuthProvider, browserPopupRedirectResolver);
     } catch (err: any) {
-      console.error("Popup Sign in rejected:", err);
+      console.error("Popup Sign in rejected:", err?.message || String(err));
       if (err.code === "auth/popup-blocked") {
         setAuthError("Sign-in popup was blocked by your browser. Please allow popups or click 'Open App' in the top right to open in a new tab.");
       } else if (err.code === "auth/unauthorized-domain") {
@@ -332,12 +359,61 @@ export default function App() {
     }
   };
 
+  const handleDemoLogin = async () => {
+    if (isLoggingIn) return;
+    try {
+      setIsLoggingIn(true);
+      setAuthError(null);
+      
+      const demoUser = {
+        uid: "demo-user-123",
+        email: "demo@divi.com",
+        displayName: "Demo Explorer",
+        emailVerified: true,
+      };
+      const demoToken = `demo_demo-user-123_demo@divi.com`;
+
+      localStorage.setItem("divi_demo_user", JSON.stringify(demoUser));
+      localStorage.setItem("divi_demo_token", demoToken);
+      
+      setCurrentUser(demoUser as any);
+      setIdToken(demoToken);
+
+      setIsSyncing(true);
+      try {
+        await fetch(getApiUrl("/api/auth/sync"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${demoToken}`
+          }
+        });
+        await loadUserMemories(demoToken);
+      } catch (err) {
+        console.error("Critical Profile sync error:", err?.message || String(err));
+      } finally {
+        setIsSyncing(false);
+      }
+    } catch (e: any) {
+      setAuthError(e.message || "Failed to activate Demo sandbox mode.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
-      await signOut(auth);
+      if (idToken?.startsWith("demo_")) {
+        setCurrentUser(null);
+        setIdToken(null);
+        localStorage.removeItem("divi_demo_user");
+        localStorage.removeItem("divi_demo_token");
+      } else {
+        await signOut(auth);
+      }
       setShowMemoriesModal(false);
     } catch (err) {
-      console.error("Failed to disconnect Google Account session:", err);
+      console.error("Failed to disconnect Google Account session:", err?.message || String(err));
     }
   };
 
@@ -379,10 +455,13 @@ export default function App() {
         className="w-full px-6 md:px-12 py-6 flex items-center justify-between bg-transparent relative z-20"
       >
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-500 via-pink-500 to-blue-500 flex items-center justify-center shadow-[0_0_20px_rgba(235,50,150,0.3)]">
-            <div className="w-5 h-5 border-[1.5px] border-white/95 rounded-full flex items-center justify-center">
-              <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
-            </div>
+          <div className="w-10 h-10 rounded-full overflow-hidden flex items-center justify-center bg-white/5 border border-white/10 shadow-[0_0_20px_rgba(99,102,241,0.2)]">
+            <img
+              src="/divi_logo.png"
+              alt="DIVI AI Logo"
+              className="w-full h-full object-contain"
+              referrerPolicy="no-referrer"
+            />
           </div>
           <span className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
             DIVI
@@ -400,47 +479,70 @@ export default function App() {
                   if (idToken) loadUserMemories(idToken);
                   setShowMemoriesModal(true);
                 }}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/25 shadow-[0_0_15px_rgba(99,102,241,0.15)] transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                className="p-2 rounded-full bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/25 shadow-[0_0_15px_rgba(99,102,241,0.15)] transition-all flex items-center justify-center cursor-pointer active:scale-95 relative"
+                title="Memory Vault"
               >
-                <Brain className="w-3.5 h-3.5 text-indigo-400 rotate-6 animate-pulse" />
-                Memory Vault
-                <span className="bg-indigo-500/20 text-indigo-200 text-[10px] px-1.5 py-0.2 rounded">
-                  {memoriesList.length}
-                </span>
+                <Brain className="w-4 h-4 text-indigo-400 rotate-6 animate-pulse" />
+                {memoriesList.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-indigo-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    {memoriesList.length}
+                  </span>
+                )}
               </button>
 
-              <div className="flex items-center gap-2 px-3 py-1 rounded-xl bg-white/5 border border-white/5">
+              <div className="flex items-center justify-center p-1 rounded-full bg-white/5 border border-white/5 cursor-pointer hover:bg-white/10 transition-colors" title="Profile">
                 <img
                   src={currentUser.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser.uid}`}
                   alt="avatar"
-                  className="w-5 h-5 rounded-full border border-white/10"
+                  className="w-7 h-7 rounded-full border border-white/10"
                   referrerPolicy="no-referrer"
                 />
-                <span className="text-xs font-medium text-slate-300 max-w-[100px] truncate hidden sm:inline">
-                  {currentUser.displayName || "Friend"}
-                </span>
               </div>
 
               <button
+                onClick={() => setShowSettingsModal(true)}
+                className="p-2 rounded-full bg-white/5 border border-white/5 text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer flex items-center justify-center"
+                title="Settings"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+
+              <button
                 onClick={handleLogout}
-                className="text-slate-500 hover:text-red-400 text-xs transition-colors p-1 cursor-pointer flex items-center gap-1"
+                className="p-2 rounded-full bg-white/5 border border-white/5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/20 transition-colors cursor-pointer flex items-center justify-center"
                 title="Sign Out"
               >
-                <LogOut className="w-3.5 h-3.5" />
+                <LogOut className="w-4 h-4" />
               </button>
             </div>
           ) : (
             <div className="flex flex-col items-end gap-2">
-              <button
-                onClick={handleLogin}
-                disabled={isLoggingIn}
-                className={`px-5 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 z-20 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-              >
-                {isLoggingIn ? 'Signing In...' : 'Sign In with Google'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleDemoLogin}
+                  disabled={isLoggingIn}
+                  className={`px-3 py-2 rounded-xl text-[11px] font-medium border border-white/10 text-slate-300 hover:bg-white/5 transition-all duration-300 transform active:scale-95 z-20 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                  title="If Google popup is blocked or unauthorized, use Sandbox mode instantly"
+                >
+                  Demo Mode
+                </button>
+                <button
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold bg-white text-slate-950 hover:bg-white/90 shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all duration-300 transform active:scale-95 z-20 ${isLoggingIn ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  {isLoggingIn ? 'Signing In...' : 'Sign In with Google'}
+                </button>
+              </div>
               {authError && (
-                <div className="absolute top-16 right-6 z-50 max-w-xs bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] px-3 py-2 rounded-lg backdrop-blur-md shadow-lg">
-                  {authError}
+                <div className="absolute top-16 right-6 z-50 max-w-xs bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] px-3 py-2 rounded-lg backdrop-blur-md shadow-lg flex flex-col gap-1">
+                  <div>{authError}</div>
+                  <button 
+                    onClick={handleDemoLogin}
+                    className="text-[10px] text-left text-slate-300 underline hover:text-white mt-1 cursor-pointer"
+                  >
+                    👉 Bypass and Sign in with Sandbox Demo Account
+                  </button>
                 </div>
               )}
             </div>
@@ -448,36 +550,394 @@ export default function App() {
         </div>
       </header>
 
+      {/* Immersive Layout Mode Segmented Controller */}
+      {browserFrame && (
+        <div className="hidden md:flex justify-center mb-2 mt-1 relative z-20">
+          <div className="bg-black/60 border border-white/10 p-1 rounded-2xl flex items-center gap-1 backdrop-blur-md shadow-xl">
+            <button
+              onClick={() => {
+                setIsBrowserFullView(false);
+                setLayoutMode("divi");
+              }}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                !isBrowserFullView && layoutMode === "divi"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-indigo-500/20"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Immersive Divi
+            </button>
+            <button
+              onClick={() => {
+                setIsBrowserFullView(false);
+                setLayoutMode("split");
+              }}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                !isBrowserFullView && layoutMode === "split"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-indigo-500/20"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Split View
+            </button>
+            <button
+              onClick={() => {
+                setIsBrowserFullView(true);
+                setLayoutMode("workspace");
+              }}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${
+                isBrowserFullView
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-indigo-500/20"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Full Workspace
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 3. Main Center Stage Container */}
       <main
         id="divi-centerstage"
-        className="flex-1 flex flex-col items-center justify-center py-6 relative z-10"
+        className={`flex-1 flex items-center justify-center relative z-10 px-4 md:px-8 transition-all duration-500 ${
+          isBrowserFullView ? "flex-col w-full max-w-full" : "flex-col md:flex-row gap-4 md:gap-12"
+        }`}
       >
-        <div className="flex flex-col items-center justify-center gap-4 relative">
-          
-          {/* Central Holographic Sphere Avatar */}
-          <DiviOrb
-            state={state}
-            volumes={volumes}
-            onToggleConnect={() => {
-              if (isDisconnected) {
-                connect(idToken || undefined);
-              } else {
-                disconnect();
-              }
-            }}
-          />
+        {layoutMode !== "workspace" && (
+          <div className="flex flex-col items-center justify-center gap-2 md:gap-4 relative shrink-0 m-0 p-0">
+            
+            {/* Central Holographic Sphere Avatar */}
+            <DiviOrb
+              state={state}
+              volumes={volumes}
+              onToggleConnect={() => {
+                if (isDisconnected) {
+                  connect(idToken || undefined);
+                } else {
+                  disconnect();
+                }
+              }}
+            />
 
-          {/* Sound waves frequency visualizer spectrum */}
-          <VoiceWaveform state={state} volumes={volumes} />
+            {/* Sound waves frequency visualizer spectrum */}
+            <VoiceWaveform state={state} volumes={volumes} style={visualizationStyle} />
 
-        </div>
+          </div>
+        )}
+
+        {/* Floating Browser Panel */}
+        {browserFrame && layoutMode !== "divi" && (
+          <div className={`hidden md:flex relative bg-black/40 border border-white/10 rounded-2xl overflow-hidden shadow-2xl flex-col backdrop-blur-md transition-all duration-500 ease-in-out ${
+            isBrowserFullView 
+              ? "w-full max-w-full md:max-w-5xl lg:max-w-6xl xl:max-w-7xl z-30 ring-4 ring-indigo-500/15" 
+              : "w-full max-w-2xl"
+          }`}>
+            <div className="bg-white/5 border-b border-white/10 px-4 py-3 flex flex-wrap gap-3 items-center justify-between">
+              {/* Left Side: Dot Buttons & Label */}
+              <div className="flex items-center gap-2 shrink-0">
+                <div className="flex gap-1.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-red-500/80"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-green-500/80"></div>
+                </div>
+                <span className="ml-2 text-xs font-mono text-slate-300 whitespace-nowrap">Divi Workspace</span>
+              </div>
+
+              {/* Center Controls: Voice Status, Mute Button, Connect/Disconnect Actions */}
+              <div className="flex items-center gap-2 md:gap-3 flex-1 justify-center min-w-[200px]">
+                {/* Micro Status Indicator Badge */}
+                <div className="flex items-center gap-1.5 bg-black/40 px-2.5 py-1 rounded-xl border border-white/5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    state === AssistantState.DISCONNECTED ? "bg-slate-500" :
+                    state === AssistantState.CONNECTING ? "bg-blue-400 animate-pulse" :
+                    state === AssistantState.LISTENING ? "bg-purple-400 animate-ping" :
+                    state === AssistantState.THINKING ? "bg-amber-400 animate-pulse" :
+                    "bg-pink-400 animate-bounce"
+                  }`}></span>
+                  <span className="text-[9px] font-mono uppercase tracking-wider text-slate-400">
+                    {state}
+                  </span>
+                </div>
+
+                {/* Micro Action Buttons */}
+                <div className="flex items-center gap-1">
+                  {isDisconnected ? (
+                    <div className="flex items-center gap-2">
+                      <select 
+                        value={voice}
+                        onChange={(e) => setVoice(e.target.value)}
+                        className="bg-black/30 border border-white/10 text-slate-300 text-[10px] rounded px-1.5 py-1 outline-none cursor-pointer"
+                        title="Select Voice"
+                      >
+                        <option value="Kore">Kore (Female)</option>
+                        <option value="Zephyr">Zephyr (Female)</option>
+                        <option value="Puck">Puck (Male)</option>
+                        <option value="Charon">Charon (Male)</option>
+                        <option value="Fenrir">Fenrir (Male)</option>
+                      </select>
+                      <select 
+                        value={["en-US", "es-ES", "fr-FR", "de-DE", "ja-JP", "ta-IN"].includes(language) ? language : "custom"}
+                        onChange={(e) => {
+                          if (e.target.value !== "custom") setLanguage(e.target.value);
+                          else setLanguage("ta-IN"); // default to something if custom is picked initially, but we can let modal handle manual entry better. Actually, for toolbar let's just add Tamil, and keep it simple. If they picked custom in settings, it will say "Custom".
+                        }}
+                        className="bg-black/30 border border-white/10 text-slate-300 text-[10px] rounded px-1.5 py-1 outline-none cursor-pointer"
+                        title="Select Language"
+                      >
+                        <option value="en-US">English</option>
+                        <option value="es-ES">Spanish</option>
+                        <option value="fr-FR">French</option>
+                        <option value="de-DE">German</option>
+                        <option value="ja-JP">Japanese</option>
+                        <option value="ta-IN">Tamil</option>
+                        {!["en-US", "es-ES", "fr-FR", "de-DE", "ja-JP", "ta-IN"].includes(language) && (
+                          <option value="custom">{language}</option>
+                        )}
+                      </select>
+                      <button
+                        onClick={() => connect(idToken || undefined)}
+                        className="px-2.5 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer shadow-md shadow-indigo-500/10 active:scale-95"
+                        title="Wake Divi Voice Session"
+                      >
+                        Wake Voice
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Micro Mute Trigger */}
+                      <button
+                        onClick={toggleMute}
+                        className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
+                          isMuted
+                            ? "bg-red-500/20 border-red-500/30 text-red-400 hover:bg-red-500/30"
+                            : "bg-white/5 border-white/5 text-slate-300 hover:bg-white/10"
+                        }`}
+                        title={isMuted ? "Unmute Microphone" : "Mute Microphone"}
+                      >
+                        {isMuted ? <MessageSquareOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                      </button>
+                      
+                      {/* Disconnect Voice Bridge */}
+                      <button
+                        onClick={disconnect}
+                        className="px-2 py-1 bg-red-600/20 border border-red-500/30 hover:bg-red-600/30 text-red-400 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all cursor-pointer"
+                        title="Disconnect Voice bridge session"
+                      >
+                        Disconnect
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Side: Current Action Overlay and Maximize/Minimize Full View Toggle */}
+              <div className="flex items-center gap-2 shrink-0">
+                {browserCurrentAction && (
+                  <div className="hidden sm:block text-[10px] uppercase tracking-wider font-mono text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded border border-indigo-500/20">
+                    {browserCurrentAction}
+                  </div>
+                )}
+
+                <button
+                  onClick={() => {
+                    const nextVal = !isBrowserFullView;
+                    setIsBrowserFullView(nextVal);
+                    setLayoutMode(nextVal ? "workspace" : "split");
+                  }}
+                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 hover:text-white transition-all cursor-pointer flex items-center justify-center"
+                  title={isBrowserFullView ? "Collapse to standard panel layout" : "Expand browser workspace to full view"}
+                >
+                  {isBrowserFullView ? (
+                    <Minimize2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
+            <div 
+              className="relative aspect-video bg-black/60 w-full overflow-hidden cursor-crosshair outline-none"
+              tabIndex={0}
+              onMouseDown={(e) => {
+                e.currentTarget.focus();
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width * 1280;
+                const y = (e.clientY - rect.top) / rect.height * 720;
+                sendBrowserInteraction("mousedown", { x, y });
+              }}
+              onMouseMove={(e) => {
+                // Only send mousemove if a button is pressed (dragging) to save bandwidth
+                if (e.buttons > 0) {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = (e.clientX - rect.left) / rect.width * 1280;
+                  const y = (e.clientY - rect.top) / rect.height * 720;
+                  sendBrowserInteraction("mousemove", { x, y });
+                }
+              }}
+              onMouseUp={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width * 1280;
+                const y = (e.clientY - rect.top) / rect.height * 720;
+                sendBrowserInteraction("mouseup", { x, y });
+              }}
+              onClick={(e) => {
+                // Keep click for simple tapping, though down/up often suffices
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width * 1280;
+                const y = (e.clientY - rect.top) / rect.height * 720;
+                sendBrowserInteraction("click", { x, y });
+              }}
+              onTouchStart={(e) => {
+                e.currentTarget.focus();
+                if (e.touches.length > 0) {
+                  const touch = e.touches[0];
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = (touch.clientX - rect.left) / rect.width * 1280;
+                  const y = (touch.clientY - rect.top) / rect.height * 720;
+                  sendBrowserInteraction("mousedown", { x, y });
+                }
+              }}
+              onTouchMove={(e) => {
+                if (e.touches.length > 0) {
+                  const touch = e.touches[0];
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = (touch.clientX - rect.left) / rect.width * 1280;
+                  const y = (touch.clientY - rect.top) / rect.height * 720;
+                  sendBrowserInteraction("mousemove", { x, y });
+                }
+              }}
+              onTouchEnd={(e) => {
+                if (e.changedTouches.length > 0) {
+                  const touch = e.changedTouches[0];
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const x = (touch.clientX - rect.left) / rect.width * 1280;
+                  const y = (touch.clientY - rect.top) / rect.height * 720;
+                  sendBrowserInteraction("mouseup", { x, y });
+                  sendBrowserInteraction("click", { x, y });
+                }
+              }}
+              onWheel={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width * 1280;
+                const y = (e.clientY - rect.top) / rect.height * 720;
+                sendBrowserInteraction("wheel", { deltaX: e.deltaX, deltaY: e.deltaY, x, y });
+              }}
+              onKeyDown={(e) => {
+                // Prevent default scrolling for certain keys
+                if (['ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) {
+                  e.preventDefault();
+                }
+                sendBrowserInteraction("keydown", { key: e.key });
+              }}
+            >
+              <img 
+                src={`data:image/jpeg;base64,${browserFrame}`} 
+                alt="Browser Stream"
+                className="w-full h-full object-contain pointer-events-none"
+              />
+              <div className="absolute inset-0 border border-white/5 pointer-events-none"></div>
+            </div>
+
+            {/* Mobile Keyboard Sync Bar / Mobile Input Helper */}
+            <div className="bg-slate-900/90 border-t border-white/10 px-4 py-3 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+              <div className="flex-1 flex gap-2">
+                <input
+                  type="text"
+                  value={mobileInputText}
+                  onChange={(e) => setMobileInputText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      if (mobileInputText) {
+                        sendBrowserInteraction("type", { text: mobileInputText });
+                        setMobileInputText("");
+                      } else {
+                        sendBrowserInteraction("keydown", { key: "Enter" });
+                      }
+                    } else if (e.key === "Backspace" && mobileInputText === "") {
+                      sendBrowserInteraction("keydown", { key: "Backspace" });
+                    }
+                  }}
+                  placeholder="Mobile users: Type here to input text..."
+                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+                <button
+                  onClick={() => {
+                    if (mobileInputText) {
+                      sendBrowserInteraction("type", { text: mobileInputText });
+                      setMobileInputText("");
+                    }
+                  }}
+                  className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  Type Text
+                </button>
+              </div>
+
+              <div className="flex gap-1 justify-end">
+                <button
+                  onClick={() => sendBrowserInteraction("keydown", { key: "Backspace" })}
+                  className="px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs font-mono transition-colors cursor-pointer"
+                  title="Backspace"
+                >
+                  ⌫
+                </button>
+                <button
+                  onClick={() => sendBrowserInteraction("keydown", { key: "Enter" })}
+                  className="px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs font-mono transition-colors cursor-pointer"
+                  title="Enter"
+                >
+                  ↵
+                </button>
+                <button
+                  onClick={() => sendBrowserInteraction("keydown", { key: "Tab" })}
+                  className="px-2.5 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs font-mono transition-colors cursor-pointer"
+                  title="Tab"
+                >
+                  ⇥
+                </button>
+                <div className="w-px h-5 bg-white/10 mx-1 self-center"></div>
+                <div className="flex gap-0.5">
+                  <button
+                    onClick={() => sendBrowserInteraction("keydown", { key: "ArrowLeft" })}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs transition-colors cursor-pointer"
+                    title="Left"
+                  >
+                    ←
+                  </button>
+                  <button
+                    onClick={() => sendBrowserInteraction("keydown", { key: "ArrowUp" })}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs transition-colors cursor-pointer"
+                    title="Up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={() => sendBrowserInteraction("keydown", { key: "ArrowDown" })}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs transition-colors cursor-pointer"
+                    title="Down"
+                  >
+                    ↓
+                  </button>
+                  <button
+                    onClick={() => sendBrowserInteraction("keydown", { key: "ArrowRight" })}
+                    className="p-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-lg text-xs transition-colors cursor-pointer"
+                    title="Right"
+                  >
+                    →
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
 
       {/* 4. Controls, Logs, Warnings & Bottom Control Hub */}
       <footer
         id="divi-controls-panel"
-        className="w-full flex flex-col items-center justify-end pb-12 gap-8 relative z-10 bg-gradient-to-t from-black via-black/95 to-transparent"
+        className="w-full flex flex-col items-center justify-end pb-6 md:pb-12 gap-4 md:gap-8 relative z-10 bg-gradient-to-t from-black via-black/95 to-transparent"
       >
         {/* Connection, hardware error banners */}
         <AnimatePresence>
@@ -501,6 +961,11 @@ export default function App() {
                     Tip: Configure your Google Gemini API Key in the **Secrets/Settings** panel of the workspace to activate voice streaming.
                   </p>
                 )}
+                {permissionError && (
+                  <p className="text-[10px] text-red-400 font-mono mt-1 leading-snug">
+                    Tip: If you are in the AI Studio preview, please open the app in a new tab or click the lock icon in the URL bar to allow microphone access.
+                  </p>
+                )}
               </div>
             </motion.div>
           )}
@@ -518,13 +983,7 @@ export default function App() {
           onToggleMute={toggleMute}
         />
 
-        {/* Minimal Disclaimer info banner */}
-        <div className="flex items-center gap-2 max-w-sm px-6 text-center select-none opacity-40">
-          <MessageSquareOff className="w-3.5 h-3.5 text-slate-400" />
-          <span className="font-sans text-[10px] text-slate-400 tracking-wide">
-            Zero Text Bubbles. Voice-First Long-Term Relational AI.
-          </span>
-        </div>
+
 
         {/* Absolute corner specs from Elegant Design */}
         <div className="absolute bottom-6 right-6 hidden md:flex items-center gap-3 text-[10px] text-slate-600 font-mono">
@@ -548,9 +1007,10 @@ export default function App() {
 
             {/* Modal Box */}
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.85, filter: "blur(12px)", y: 40, rotateX: 15 }}
+              animate={{ opacity: 1, scale: 1, filter: "blur(0px)", y: 0, rotateX: 0 }}
+              exit={{ opacity: 0, scale: 1.05, filter: "blur(8px)", y: -20, rotateX: -10 }}
+              transition={{ type: "spring", damping: 20, stiffness: 100, duration: 0.5 }}
               className="relative w-full max-w-4xl h-[85vh] bg-[#090911]/90 border border-slate-800 rounded-3xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex flex-col"
             >
               {/* Dynamic decorative light leak */}
@@ -1048,155 +1508,179 @@ export default function App() {
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                          {filteredMemories.map((m) => {
-                            const isEditingThis = editingId === m.id;
-                            
-                            if (isEditingThis) {
+                          <AnimatePresence mode="popLayout">
+                            {filteredMemories.map((m) => {
+                              const isEditingThis = editingId === m.id;
+                              
+                              if (isEditingThis) {
+                                return (
+                                  <motion.div
+                                    key={m.id}
+                                    layout
+                                    initial={{ opacity: 0, scale: 0.95, height: 0 }}
+                                    animate={{ opacity: 1, scale: 1, height: "auto" }}
+                                    exit={{ opacity: 0, scale: 0.95, height: 0 }}
+                                    transition={{
+                                      type: "spring",
+                                      stiffness: 350,
+                                      damping: 35,
+                                      opacity: { duration: 0.2 },
+                                      height: { duration: 0.25 }
+                                    }}
+                                    className="p-4 rounded-2xl bg-indigo-950/15 border border-indigo-500/30 flex flex-col justify-between gap-3 transition-all overflow-hidden"
+                                  >
+                                    <div className="space-y-3">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-[10px] uppercase font-mono tracking-widest text-indigo-400 font-bold">
+                                          Editing Memory
+                                        </span>
+                                        <span className="text-[9px] font-mono text-slate-500">ID: {m.id}</span>
+                                      </div>
+
+                                      <div className="space-y-2">
+                                        <div>
+                                          <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Key</label>
+                                          <input
+                                            type="text"
+                                            value={editingKey}
+                                            onChange={(e) => setEditingKey(e.target.value)}
+                                            className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Value</label>
+                                          <input
+                                            type="text"
+                                            value={editingValue}
+                                            onChange={(e) => setEditingValue(e.target.value)}
+                                            className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Category</label>
+                                          <select
+                                            value={editingCategory}
+                                            onChange={(e) => setEditingCategory(e.target.value)}
+                                            className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                                          >
+                                            <option value="identity">Identity</option>
+                                            <option value="preference">Preference</option>
+                                            <option value="project">Project</option>
+                                            <option value="relationship">Relationship</option>
+                                            <option value="goal">Goal</option>
+                                            <option value="fact">Fact</option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-end gap-2 border-t border-white/[0.05] pt-2">
+                                      <button
+                                        onClick={() => setEditingId(null)}
+                                        className="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-semibold rounded-md cursor-pointer transition-all"
+                                      >
+                                        Cancel
+                                      </button>
+                                      <button
+                                        onClick={() => handleUpdateMemory(m.id)}
+                                        disabled={isEditingSaving}
+                                        className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-indigo-100 text-[10px] font-semibold rounded-md flex items-center gap-1 cursor-pointer transition-all"
+                                      >
+                                        <Check className="w-3 h-3" />
+                                        {isEditingSaving ? "Saving..." : "Save"}
+                                      </button>
+                                    </div>
+                                  </motion.div>
+                                );
+                              }
+
                               return (
-                                <div
+                                <motion.div
                                   key={m.id}
-                                  className="p-4 rounded-2xl bg-indigo-950/15 border border-indigo-500/30 flex flex-col justify-between gap-3 transition-all"
+                                  layout
+                                  initial={{ opacity: 0, scale: 0.95, height: 0 }}
+                                  animate={{ opacity: 1, scale: 1, height: "auto" }}
+                                  exit={{ opacity: 0, scale: 0.95, height: 0 }}
+                                  transition={{
+                                    type: "spring",
+                                    stiffness: 350,
+                                    damping: 35,
+                                    opacity: { duration: 0.2 },
+                                    height: { duration: 0.25 }
+                                  }}
+                                  className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.04] flex flex-col justify-between gap-3 hover:bg-white/[0.04] transition-all group relative overflow-hidden"
                                 >
-                                  <div className="space-y-3">
-                                    <div className="flex items-center justify-between">
-                                      <span className="text-[10px] uppercase font-mono tracking-widest text-indigo-400 font-bold">
-                                        Editing Memory
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="flex flex-col gap-1">
+                                      <span className="text-[10px] uppercase font-mono tracking-widest text-[#a855f7] font-semibold">
+                                        {m.type}
                                       </span>
-                                      <span className="text-[9px] font-mono text-slate-500">ID: {m.id}</span>
+                                      {m.key && (
+                                        <span className="text-slate-400 text-[11px] font-semibold bg-white/5 px-2 py-0.5 rounded-md w-max">
+                                          {m.key}
+                                        </span>
+                                      )}
+                                      <p className="text-xs text-slate-200 font-medium leading-relaxed mt-1">
+                                        {m.value}
+                                      </p>
                                     </div>
-
-                                    <div className="space-y-2">
-                                      <div>
-                                        <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Key</label>
-                                        <input
-                                          type="text"
-                                          value={editingKey}
-                                          onChange={(e) => setEditingKey(e.target.value)}
-                                          className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Value</label>
-                                        <input
-                                          type="text"
-                                          value={editingValue}
-                                          onChange={(e) => setEditingValue(e.target.value)}
-                                          className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                                        />
-                                      </div>
-                                      <div>
-                                        <label className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Category</label>
-                                        <select
-                                          value={editingCategory}
-                                          onChange={(e) => setEditingCategory(e.target.value)}
-                                          className="w-full px-2 py-1 bg-black/60 border border-white/10 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                                        >
-                                          <option value="identity">Identity</option>
-                                          <option value="preference">Preference</option>
-                                          <option value="project">Project</option>
-                                          <option value="relationship">Relationship</option>
-                                          <option value="goal">Goal</option>
-                                          <option value="fact">Fact</option>
-                                        </select>
-                                      </div>
+                                    
+                                    {/* Edit & Delete Buttons with Dual-Stage Confirmation */}
+                                    <div className="shrink-0 flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-all">
+                                      {deleteConfirmId === m.id ? (
+                                        <div className="flex items-center gap-1 bg-black/40 px-1 py-0.5 rounded border border-red-500/20">
+                                          <button
+                                            onClick={() => {
+                                              handleDeleteMemory(m.id);
+                                              setDeleteConfirmId(null);
+                                            }}
+                                            title="Confirm delete"
+                                            className="px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-red-100 text-[9px] font-bold transition-all cursor-pointer"
+                                          >
+                                            Forget?
+                                          </button>
+                                          <button
+                                            onClick={() => setDeleteConfirmId(null)}
+                                            title="Cancel"
+                                            className="px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 text-[9px] transition-all cursor-pointer"
+                                          >
+                                            Keep
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <button
+                                            onClick={() => {
+                                              setEditingId(m.id);
+                                              setEditingKey(m.key || "");
+                                              setEditingValue(m.value || "");
+                                              setEditingCategory(m.type || "fact");
+                                            }}
+                                            title="Edit memory"
+                                            className="p-1 rounded-md hover:bg-white/5 text-slate-400 hover:text-indigo-400 transition-all cursor-pointer"
+                                          >
+                                            <Edit className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            onClick={() => setDeleteConfirmId(m.id)}
+                                            title="Delete memory"
+                                            className="p-1 rounded-md hover:bg-white/5 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </>
+                                      )}
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center justify-end gap-2 border-t border-white/[0.05] pt-2">
-                                    <button
-                                      onClick={() => setEditingId(null)}
-                                      className="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-semibold rounded-md cursor-pointer transition-all"
-                                    >
-                                      Cancel
-                                    </button>
-                                    <button
-                                      onClick={() => handleUpdateMemory(m.id)}
-                                      disabled={isEditingSaving}
-                                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-indigo-100 text-[10px] font-semibold rounded-md flex items-center gap-1 cursor-pointer transition-all"
-                                    >
-                                      <Check className="w-3 h-3" />
-                                      {isEditingSaving ? "Saving..." : "Save"}
-                                    </button>
+                                  <div className="flex items-center justify-between border-t border-white/[0.03] pt-2.5 text-[10px] font-mono text-slate-500">
+                                    <span>Imp: {m.importance || 10}/10</span>
+                                    <span>{new Date(m.createdAt).toLocaleDateString()}</span>
                                   </div>
-                                </div>
+                                </motion.div>
                               );
-                            }
-
-                            return (
-                              <div
-                                key={m.id}
-                                className="p-4 rounded-2xl bg-white/[0.02] border border-white/[0.04] flex flex-col justify-between gap-3 hover:bg-white/[0.04] transition-all group relative"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex flex-col gap-1">
-                                    <span className="text-[10px] uppercase font-mono tracking-widest text-[#a855f7] font-semibold">
-                                      {m.type}
-                                    </span>
-                                    {m.key && (
-                                      <span className="text-slate-400 text-[11px] font-semibold bg-white/5 px-2 py-0.5 rounded-md w-max">
-                                        {m.key}
-                                      </span>
-                                    )}
-                                    <p className="text-xs text-slate-200 font-medium leading-relaxed mt-1">
-                                      {m.value}
-                                    </p>
-                                  </div>
-                                  
-                                  {/* Edit & Delete Buttons with Dual-Stage Confirmation */}
-                                  <div className="shrink-0 flex items-center gap-1 opacity-60 group-hover:opacity-100 transition-all">
-                                    {deleteConfirmId === m.id ? (
-                                      <div className="flex items-center gap-1 bg-black/40 px-1 py-0.5 rounded border border-red-500/20">
-                                        <button
-                                          onClick={() => {
-                                            handleDeleteMemory(m.id);
-                                            setDeleteConfirmId(null);
-                                          }}
-                                          title="Confirm delete"
-                                          className="px-1.5 py-0.5 rounded bg-red-600 hover:bg-red-500 text-red-100 text-[9px] font-bold transition-all cursor-pointer"
-                                        >
-                                          Forget?
-                                        </button>
-                                        <button
-                                          onClick={() => setDeleteConfirmId(null)}
-                                          title="Cancel"
-                                          className="px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 text-[9px] transition-all cursor-pointer"
-                                        >
-                                          Keep
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            setEditingId(m.id);
-                                            setEditingKey(m.key || "");
-                                            setEditingValue(m.value || "");
-                                            setEditingCategory(m.type || "fact");
-                                          }}
-                                          title="Edit memory"
-                                          className="p-1 rounded-md hover:bg-white/5 text-slate-400 hover:text-indigo-400 transition-all cursor-pointer"
-                                        >
-                                          <Edit className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                          onClick={() => setDeleteConfirmId(m.id)}
-                                          title="Delete memory"
-                                          className="p-1 rounded-md hover:bg-white/5 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center justify-between border-t border-white/[0.03] pt-2.5 text-[10px] font-mono text-slate-500">
-                                  <span>Imp: {m.importance || 10}/10</span>
-                                  <span>{new Date(m.createdAt).toLocaleDateString()}</span>
-                                </div>
-                              </div>
-                            );
-                          })}
+                            })}
+                          </AnimatePresence>
                         </div>
                       )}
                     </div>
@@ -1204,6 +1688,196 @@ export default function App() {
                 </div>
               </div>
 
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettingsModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setShowSettingsModal(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85, filter: "blur(12px)", y: 40, rotateX: 15 }}
+              animate={{ opacity: 1, scale: 1, filter: "blur(0px)", y: 0, rotateX: 0 }}
+              exit={{ opacity: 0, scale: 1.05, filter: "blur(8px)", y: -20, rotateX: -10 }}
+              transition={{ type: "spring", damping: 20, stiffness: 100, duration: 0.5 }}
+              className="relative w-full max-w-sm bg-slate-900 border border-white/10 shadow-2xl overflow-hidden rounded-2xl p-6"
+            >
+              <div className="flex items-center justify-between border-b border-white/10 pb-4 mb-6">
+                <div className="flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-indigo-400" />
+                  <h3 className="text-sm font-semibold tracking-wide text-slate-100 uppercase">Divi Settings</h3>
+                </div>
+                <button
+                  onClick={() => setShowSettingsModal(false)}
+                  className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+                    Voice Persona
+                  </label>
+                  <select
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value)}
+                    className="w-full bg-black/30 border border-white/10 text-slate-300 text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="Kore">Kore (Female)</option>
+                    <option value="Zephyr">Zephyr (Female)</option>
+                    <option value="Puck">Puck (Male)</option>
+                    <option value="Charon">Charon (Male)</option>
+                    <option value="Fenrir">Fenrir (Male)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+                    Language
+                  </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={["en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "ja-JP", "ko-KR", "zh-CN", "ta-IN"].includes(language) ? language : "custom"}
+                      onChange={(e) => {
+                        if (e.target.value !== "custom") {
+                          setLanguage(e.target.value);
+                        } else {
+                          setLanguage("");
+                        }
+                      }}
+                      className="flex-1 bg-black/30 border border-white/10 text-slate-300 text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                    >
+                      <option value="en-US">English (US)</option>
+                      <option value="es-ES">Spanish (Spain)</option>
+                      <option value="fr-FR">French</option>
+                      <option value="de-DE">German</option>
+                      <option value="it-IT">Italian</option>
+                      <option value="ja-JP">Japanese</option>
+                      <option value="ko-KR">Korean</option>
+                      <option value="zh-CN">Chinese (Simplified)</option>
+                      <option value="ta-IN">Tamil</option>
+                      <option value="custom">Custom...</option>
+                    </select>
+                    {!["en-US", "es-ES", "fr-FR", "de-DE", "it-IT", "ja-JP", "ko-KR", "zh-CN", "ta-IN"].includes(language) && (
+                      <input
+                        type="text"
+                        placeholder="Language name"
+                        value={language}
+                        onChange={(e) => setLanguage(e.target.value)}
+                        className="flex-1 min-w-[120px] bg-black/30 border border-white/10 text-slate-300 text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                      />
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-2">
+                    Takes effect on next connection.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
+                    Orb Theme
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => setOrbTheme("indigo")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        orbTheme === "indigo" 
+                          ? "bg-indigo-500/20 border-indigo-400 text-indigo-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Indigo</span>
+                    </button>
+                    <button
+                      onClick={() => setOrbTheme("emerald")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        orbTheme === "emerald" 
+                          ? "bg-emerald-500/20 border-emerald-400 text-emerald-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Emerald</span>
+                    </button>
+                    <button
+                      onClick={() => setOrbTheme("rose")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        orbTheme === "rose" 
+                          ? "bg-rose-500/20 border-rose-400 text-rose-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Rose</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between mt-6">
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                    Orb Particle Density
+                  </label>
+                  <button
+                    onClick={() => setHighParticleDensity(!highParticleDensity)}
+                    className={`relative w-11 h-6 rounded-full transition-colors ${
+                      highParticleDensity ? "bg-indigo-500" : "bg-white/10"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        highParticleDensity ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="space-y-3 mt-6">
+                  <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
+                    Visualization Style
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => setVisualizationStyle("bars")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        visualizationStyle === "bars" 
+                          ? "bg-indigo-500/20 border-indigo-400 text-indigo-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Bars</span>
+                    </button>
+                    <button
+                      onClick={() => setVisualizationStyle("circular")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        visualizationStyle === "circular" 
+                          ? "bg-indigo-500/20 border-indigo-400 text-indigo-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Circular</span>
+                    </button>
+                    <button
+                      onClick={() => setVisualizationStyle("linear")}
+                      className={`h-10 rounded-lg border flex items-center justify-center transition-all ${
+                        visualizationStyle === "linear" 
+                          ? "bg-indigo-500/20 border-indigo-400 text-indigo-300" 
+                          : "bg-white/5 border-white/10 text-slate-400 hover:bg-white/10"
+                      }`}
+                    >
+                      <span className="text-xs font-medium">Linear</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </motion.div>
           </div>
         )}

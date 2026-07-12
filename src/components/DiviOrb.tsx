@@ -5,6 +5,7 @@
 
 import { motion } from "motion/react";
 import { AssistantState } from "../types";
+import { useAssistantStore } from "../store";
 
 interface DiviOrbProps {
   state: AssistantState;
@@ -19,6 +20,8 @@ export function DiviOrb({ state, volumes, onToggleConnect }: DiviOrbProps) {
   const isThinking = state === AssistantState.THINKING;
   const isSpeaking = state === AssistantState.SPEAKING;
 
+  const orbTheme = useAssistantStore(s => s.orbTheme);
+
   // Derive active amplitude for dynamic scaling
   const amplitude = isSpeaking ? volumes.output : isListening ? volumes.input : 0;
   
@@ -27,6 +30,86 @@ export function DiviOrb({ state, volumes, onToggleConnect }: DiviOrbProps) {
 
   // State colors & glow gradients
   const getOrbColorTheme = () => {
+    if (orbTheme === "emerald") {
+      switch (state) {
+        case AssistantState.CONNECTING:
+          return {
+            glow: "rgba(16,185,129,0.35)",
+            gradient: "from-emerald-500 via-teal-600 to-cyan-600",
+            ringColor: "stroke-emerald-400",
+            innerColor: "bg-emerald-900/40",
+          };
+        case AssistantState.LISTENING:
+          return {
+            glow: "rgba(5,150,105,0.4)",
+            gradient: "from-green-500 via-emerald-400 to-teal-600",
+            ringColor: "stroke-green-400",
+            innerColor: "bg-green-950/40",
+          };
+        case AssistantState.THINKING:
+          return {
+            glow: "rgba(234,179,8,0.35)",
+            gradient: "from-yellow-400 via-lime-500 to-emerald-700",
+            ringColor: "stroke-yellow-400",
+            innerColor: "bg-yellow-950/30",
+          };
+        case AssistantState.SPEAKING:
+          return {
+            glow: "rgba(20,184,166,0.5)",
+            gradient: "from-teal-500 via-cyan-600 to-emerald-500",
+            ringColor: "stroke-teal-400",
+            innerColor: "bg-teal-950/40",
+          };
+        case AssistantState.DISCONNECTED:
+        default:
+          return {
+            glow: "rgba(16,185,129,0.1)",
+            gradient: "from-slate-700 via-emerald-950 to-slate-900",
+            ringColor: "stroke-slate-600",
+            innerColor: "bg-black/50",
+          };
+      }
+    } else if (orbTheme === "rose") {
+      switch (state) {
+        case AssistantState.CONNECTING:
+          return {
+            glow: "rgba(244,63,94,0.35)",
+            gradient: "from-rose-500 via-pink-600 to-red-600",
+            ringColor: "stroke-rose-400",
+            innerColor: "bg-rose-900/40",
+          };
+        case AssistantState.LISTENING:
+          return {
+            glow: "rgba(225,29,72,0.4)",
+            gradient: "from-red-500 via-rose-400 to-pink-600",
+            ringColor: "stroke-red-400",
+            innerColor: "bg-red-950/40",
+          };
+        case AssistantState.THINKING:
+          return {
+            glow: "rgba(249,115,22,0.35)",
+            gradient: "from-orange-400 via-rose-500 to-red-700",
+            ringColor: "stroke-orange-400",
+            innerColor: "bg-orange-950/30",
+          };
+        case AssistantState.SPEAKING:
+          return {
+            glow: "rgba(236,72,153,0.5)",
+            gradient: "from-pink-500 via-rose-600 to-red-500",
+            ringColor: "stroke-pink-400",
+            innerColor: "bg-pink-950/40",
+          };
+        case AssistantState.DISCONNECTED:
+        default:
+          return {
+            glow: "rgba(244,63,94,0.1)",
+            gradient: "from-slate-700 via-rose-950 to-slate-900",
+            ringColor: "stroke-slate-600",
+            innerColor: "bg-black/50",
+          };
+      }
+    }
+
     switch (state) {
       case AssistantState.CONNECTING:
         return {
@@ -70,7 +153,7 @@ export function DiviOrb({ state, volumes, onToggleConnect }: DiviOrbProps) {
   const { glow, gradient, ringColor, innerColor } = getOrbColorTheme();
 
   return (
-    <div id="orb-visualizer-center" className="relative flex items-center justify-center w-[460px] h-[460px] z-10 select-none">
+    <div id="orb-visualizer-center" className="relative flex items-center justify-center w-[460px] h-[460px] z-10 select-none scale-75 m-0 p-0">
       
       {/* Concentric outer styling rings from Elegant Dark */}
       <div className="absolute w-[440px] h-[440px] rounded-full border border-white/5 pointer-events-none animate-pulse"></div>

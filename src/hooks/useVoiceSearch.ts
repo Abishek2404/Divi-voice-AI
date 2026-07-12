@@ -39,7 +39,7 @@ export function useVoiceSearch(onResult: (text: string) => void) {
     };
 
     recognition.onerror = (event: any) => {
-      console.error('Speech recognition error', event.error);
+      console.error('Speech recognition error', event.error?.message || String(event.error));
       setIsListening(false);
     };
 

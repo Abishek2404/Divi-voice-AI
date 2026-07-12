@@ -5,6 +5,8 @@
 
 import { motion } from "motion/react";
 import { AssistantState } from "../types";
+import { useAssistantStore } from "../store";
+import { useMemo } from "react";
 
 interface BackgroundEffectsProps {
   state: AssistantState;
@@ -12,6 +14,8 @@ interface BackgroundEffectsProps {
 }
 
 export function BackgroundEffects({ state, volume }: BackgroundEffectsProps) {
+  const { highParticleDensity } = useAssistantStore();
+
   // Get glow styles based on AssistantState to make the ambient lights pulsate and respond
   const getBlobColor = () => {
     switch (state) {
@@ -51,12 +55,39 @@ export function BackgroundEffects({ state, volume }: BackgroundEffectsProps) {
 
   const { blob1, blob2, glowScale } = getBlobColor();
 
+  const numParticles = highParticleDensity ? 40 : 10;
+  
+  const particles = useMemo(() => {
+    return Array.from({ length: numParticles }).map((_, i) => ({
+      id: i,
+      left: `${Math.random() * 100}%`,
+      top: `${Math.random() * 100}%`,
+      size: Math.random() * 2 + 1, // 1 to 3px
+      opacity: Math.random() * 0.4 + 0.1,
+      animDuration: Math.random() * 5 + 3, // 3 to 8s
+      color: ["bg-white", "bg-purple-400", "bg-blue-400"][Math.floor(Math.random() * 3)],
+    }));
+  }, [numParticles]);
+
   return (
     <div id="bg-effects-root" className="absolute inset-0 overflow-hidden pointer-events-none z-0 bg-[#020205]">
-      {/* Starry coordinates from Elegant Dark */}
-      <div className="absolute top-[20%] right-[15%] w-1 h-1 bg-white/40 rounded-full shadow-[0_0_8px_#fff]"></div>
-      <div className="absolute top-[60%] left-[10%] w-1 h-1 bg-purple-400/30 rounded-full"></div>
-      <div className="absolute bottom-[30%] right-[25%] w-1 h-1 bg-blue-400/30 rounded-full"></div>
+      {/* Dynamic Ambient Particles */}
+      {particles.map((p) => (
+        <motion.div
+          key={p.id}
+          className={`absolute ${p.color} rounded-full`}
+          style={{ left: p.left, top: p.top, width: p.size, height: p.size }}
+          animate={{
+            opacity: [p.opacity, p.opacity * 2.5, p.opacity],
+            y: [0, -20, 0],
+          }}
+          transition={{
+            duration: p.animDuration,
+            repeat: Infinity,
+            ease: "easeInOut",
+          }}
+        />
+      ))}
 
       {/* Immersive space canvas starry grid */}
       <div 

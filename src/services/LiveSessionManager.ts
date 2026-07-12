@@ -56,13 +56,20 @@ export class LiveSessionManager {
         store.setPermissionError(null);
       } catch (err: any) {
         store.setPermissionGranted(false);
-        store.setPermissionError(err?.message || "Microphone permission denied. Divi needs microphone access to talk!");
+        store.setPermissionError("Microphone permission denied. Please allow microphone access. If you are in the preview, try opening the app in a new tab.");
         store.setState(AssistantState.DISCONNECTED);
         return;
       }
 
       // 2. Prep standard connection URL with optional ID Token for user memory lookup
-      const queryParam = idToken ? `?token=${encodeURIComponent(idToken)}` : "";
+      const storeVoice = store.voice || "Kore";
+      const storeLanguage = store.language || "en-US";
+      const params = new URLSearchParams();
+      if (idToken) params.append("token", idToken);
+      params.append("voice", storeVoice);
+      params.append("language", storeLanguage);
+      const queryParam = `?${params.toString()}`;
+      
       const socketUrl = getWsUrl(`/api/live-stream${queryParam}`);
 
       console.log(`Connecting Divi Live WebSocket to: ${socketUrl}`);
@@ -73,7 +80,7 @@ export class LiveSessionManager {
         try {
           console.log("WebSocket connection connected, waiting for Gemini API acknowledgement...");
         } catch (e) {
-          console.error("Error in onopen handler:", e);
+          console.error("Error in onopen handler:", e?.message || String(e));
         }
       };
 
@@ -129,13 +136,22 @@ export class LiveSessionManager {
           }
 
           else if (msg.type === "error") {
-            console.error("Received server error feedback:", msg.message);
-            useAssistantStore.getState().setServerError(msg.message);
+            const errorStr = typeof msg.message === 'string' ? msg.message : JSON.stringify(msg.message);
+            console.error("Received server error feedback:", errorStr);
+            useAssistantStore.getState().setServerError(errorStr);
             this.disconnect();
           }
 
+          else if (msg.type === "browser_frame") {
+            useAssistantStore.getState().setBrowserFrame(msg.data);
+          }
+          
+          else if (msg.type === "browser_action") {
+            useAssistantStore.getState().setBrowserCurrentAction(msg.data);
+          }
+
         } catch (err) {
-          console.error("Failed to parse incoming WebSocket frame:", err);
+          console.error("Failed to parse incoming WebSocket frame:", err?.message || String(err));
         }
       };
 
@@ -144,22 +160,22 @@ export class LiveSessionManager {
           console.log(`Server connection closed. Code: ${event.code}`);
           this.handleUnexpectedDisconnect();
         } catch (e) {
-          console.error("Error in onclose handler:", e);
+          console.error("Error in onclose handler:", e?.message || String(e));
         }
       };
 
       this.socket.onerror = (err) => {
         try {
-          console.error("WebSocket transport error:", err);
+          console.error("WebSocket transport error:", (err as any)?.message || String(err));
           useAssistantStore.getState().setServerError("Unable to connect to Divi's server websocket feed.");
           this.handleUnexpectedDisconnect();
         } catch (e) {
-          console.error("Error in onerror handler:", e);
+          console.error("Error in onerror handler:", e?.message || String(e));
         }
       };
 
     } catch (err: any) {
-      console.error("LiveSessionManager connect broke:", err);
+      console.error("LiveSessionManager connect broke:", err?.message || String(err));
       useAssistantStore.getState().setServerError(err?.message || "Failed to start conversation.");
       this.disconnect();
     }
@@ -168,6 +184,19 @@ export class LiveSessionManager {
   /**
    * Helper to write raw user voice chunk to WebSocket
    */
+  public sendBrowserInteraction(action: string, payload: any): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    try {
+      this.socket.send(JSON.stringify({
+        type: "browser_interaction",
+        action,
+        ...payload
+      }));
+    } catch (e) {
+      console.error("Failed to send browser interaction:", e?.message || String(e));
+    }
+  }
+
   private sendAudioChunkToBack(base64PCM: string): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
     
@@ -200,7 +229,7 @@ export class LiveSessionManager {
         data: base64PCM
       }));
     } catch (e) {
-      console.error("Failed to stream audio chunk to server:", e);
+      console.error("Failed to stream audio chunk to server:", e?.message || String(e));
     }
   }
 
@@ -264,7 +293,7 @@ export class LiveSessionManager {
       useAssistantStore.getState().setState(AssistantState.CONNECTING);
       useAssistantStore.getState().setServerError("Connection lost. Reconnecting...");
       setTimeout(() => {
-        this.connect(this.lastIdToken).catch(console.error);
+        this.connect(this.lastIdToken).catch(e => console.error("Reconnect failed:", e?.message || String(e)));
       }, 2000 * this.reconnectAttempts); // Exponential-ish backoff
     } else {
       useAssistantStore.getState().setServerError("Lost connection to server and failed to reconnect.");

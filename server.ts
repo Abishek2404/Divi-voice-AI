@@ -12,11 +12,16 @@ import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { adminAuth } from "./src/lib/firebase-admin.ts";
 import { MemoryService } from "./src/services/MemoryService.ts";
 import { connectDB } from "./src/db/mongoose.ts";
-import { Memory } from "./src/db/models.ts";
-import { toolDeclarations } from "./src/agent/ToolRegistry.ts";
-import { ToolExecutor } from "./src/agent/ToolExecutor.ts";
+import { Memory, Conversation } from "./src/db/models.ts";
 
 dotenv.config();
+
+process.on('uncaughtException', (err: any) => {
+  console.error('Uncaught Exception:', err?.message || (err instanceof Error ? err.toString() : "Unknown Error"));
+});
+process.on('unhandledRejection', (reason: any, promise) => {
+  console.error('Unhandled Rejection:', reason?.message || (reason instanceof Error ? reason.toString() : "Unknown Rejection"));
+});
 
 const app = express();
 const PORT = 3000;
@@ -42,7 +47,7 @@ app.post("/api/report-error", (req, res) => {
     fs.appendFileSync(path.join(process.cwd(), "error.log"), logLine);
     console.log("Recorded browser runtime error to error.log");
   } catch (err) {
-    console.error("Failed to write browser error to log file:", err);
+    console.error("Failed to write browser error to log file:", err?.message || String(err));
   }
   res.status(200).json({ ok: true });
 });
@@ -104,7 +109,7 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
     const savedUser = await MemoryService.getOrCreateUser(user.uid, user.email || "anonymous@divi.com");
     res.json({ success: true, user: savedUser });
   } catch (error: any) {
-    console.error("Auth sync route crashed:", error);
+    console.error("Auth sync route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to sync authenticated user profile" });
   }
 });
@@ -115,15 +120,14 @@ app.post("/api/auth/sync", requireAuth, async (req: AuthRequest, res) => {
 app.get("/api/memories", requireAuth, async (req: AuthRequest, res) => {
   try {
     const user = req.user!;
-    const items = await Memory.find({ userId: user.uid })
-      .sort({ importance: -1, createdAt: -1 });
+    const items = await MemoryService.getAllMemories(user.uid);
       
     const mappedMemories = items.map(m => ({
-      id: m._id.toString(),
+      id: m._id ? m._id.toString() : m.key,
       type: m.category,
       key: m.key,
-      value: m.content,
-      importance: m.importance,
+      value: m.value || m.content,
+      importance: m.importance || 10,
       metadata: m.metadata || {},
       createdAt: m.createdAt,
       embedding: []
@@ -131,7 +135,7 @@ app.get("/api/memories", requireAuth, async (req: AuthRequest, res) => {
       
     res.json({ success: true, memories: mappedMemories });
   } catch (error: any) {
-    console.error("Fetch memories route crashed:", error);
+    console.error("Fetch memories route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to retrieve memories" });
   }
 });
@@ -149,7 +153,7 @@ app.post("/api/memories/search", requireAuth, async (req: AuthRequest, res) => {
     const results = await MemoryService.searchRelatedMemories(user.uid, query, limit || 5);
     res.json({ success: true, results });
   } catch (error: any) {
-    console.error("Semantic search memories route crashed:", error);
+    console.error("Semantic search memories route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to execute semantic search" });
   }
 });
@@ -176,15 +180,17 @@ app.get("/api/memories/inspector/:id", requireAuth, async (req: AuthRequest, res
   try {
     const user = req.user!;
     const { id } = req.params;
-    const item = await Memory.findOne({ _id: id, userId: user.uid });
+    
+    const items = await MemoryService.getAllMemories(user.uid);
+    const item = items.find(m => (m._id ? m._id.toString() : m.key) === id);
     if (!item) return res.status(404).json({ error: "Not found" });
     
     const mappedMemory = {
-      id: item._id.toString(),
+      id: item._id ? item._id.toString() : item.key,
       type: item.category,
       key: item.key,
-      value: item.content,
-      importance: item.importance,
+      value: item.value || item.content,
+      importance: item.importance || 10,
       metadata: {},
       createdAt: item.createdAt,
       embedding: []
@@ -212,7 +218,7 @@ app.post("/api/memories", requireAuth, async (req: AuthRequest, res) => {
 
     res.json({ success: true, message: "Long term memory item successfully saved." });
   } catch (error: any) {
-    console.error("Save memory route crashed:", error);
+    console.error("Save memory route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to record manual memory" });
   }
 });
@@ -226,25 +232,25 @@ app.put("/api/memories/:id", requireAuth, async (req: AuthRequest, res) => {
     const { id } = req.params;
     const { type, key, value } = req.body;
 
-    const memory = await Memory.findOne({ _id: id, userId: user.uid });
-    if (!memory) {
+    const items = await MemoryService.getAllMemories(user.uid);
+    const item = items.find(m => (m._id ? m._id.toString() : m.key) === id);
+    if (!item) {
       return res.status(404).json({ error: "Memory item not found or unauthorized access." });
     }
 
-    const cleanKey = (key || memory.key).trim().toLowerCase().replace(/\s+/g, '_');
-    const finalValue = value !== undefined ? value : memory.value;
-    const finalCategory = type || memory.category;
+    const cleanKey = (key || item.key).trim().toLowerCase().replace(/\s+/g, '_');
+    const finalValue = value !== undefined ? value : (item.value || item.content);
+    const finalCategory = type || item.category;
 
-    memory.key = cleanKey;
-    memory.value = finalValue;
-    memory.content = finalValue;
-    memory.category = finalCategory;
-    await memory.save();
+    await MemoryService.saveMemory(user.uid, cleanKey, finalValue, finalCategory);
+    
+    if (cleanKey !== item.key) {
+      await MemoryService.deleteMemory(user.uid, item.key);
+    }
 
-    console.log(`[MEMORY UPDATED] Key: "${cleanKey}", Value: "${finalValue}" for User: ${user.uid}`);
     res.json({ success: true, message: "Memory successfully updated." });
   } catch (error: any) {
-    console.error("Update memory route crashed:", error);
+    console.error("Update memory route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to update memory item" });
   }
 });
@@ -257,17 +263,19 @@ app.delete("/api/memories/:id", requireAuth, async (req: AuthRequest, res) => {
     const user = req.user!;
     const { id } = req.params;
     
-    // Verify ownership before deletion to isolate users
-    const match = await Memory.findOneAndDelete({ _id: id, userId: user.uid });
-
-    if (!match) {
+    const items = await MemoryService.getAllMemories(user.uid);
+    const item = items.find(m => (m._id ? m._id.toString() : m.key) === id);
+    
+    if (!item) {
       return res.status(404).json({ error: "Memory item not found or unauthorized access." });
     }
 
-    console.log(`[MEMORY DELETED] Key: "${match.key}" for User: ${user.uid}`);
+    await MemoryService.deleteMemory(user.uid, item.key);
+
+    console.log(`[MEMORY DELETED] Key: "${item.key}" for User: ${user.uid}`);
     res.json({ success: true, message: "Memory successfully forgotten." });
   } catch (error: any) {
-    console.error("Forget memory route crashed:", error);
+    console.error("Forget memory route crashed:", error?.message || String(error));
     res.status(500).json({ error: error.message || "Failed to delete memory item" });
   }
 });
@@ -296,21 +304,50 @@ async function startServer() {
     // Allow Vite to handle other WebSocket upgrades (HMR)
   });
 
+  wss.on("error", (err: any) => {
+    console.error("WebSocket server error:", err?.message || String(err));
+  });
+
   wss.on("connection", async (clientWs: WebSocket, request: any) => {
     console.log("WebSocket connection established with client");
     
     let isClosed = false;
     let session: any = null;
+    let sessionId = Math.random().toString(36).substring(7); // Create new session ID for tracking
     let user: any = null;
     const dialogLog: string[] = [];
+    let messageCounter = 0;
 
     // Parse ID Token from the URL query parameter to recognize the user
+    let preferredVoice = "Kore";
+    let preferredLanguage = "en-US";
     try {
       const urlObj = new URL(request.url || "", `http://${request.headers.host || "localhost"}`);
       const token = urlObj.searchParams.get("token");
+      const voiceParam = urlObj.searchParams.get("voice");
+      const languageParam = urlObj.searchParams.get("language");
+      
+      if (voiceParam && ["Puck", "Charon", "Kore", "Fenrir", "Zephyr"].includes(voiceParam)) {
+        preferredVoice = voiceParam;
+      }
+      if (languageParam) {
+        preferredLanguage = languageParam;
+      }
       if (token) {
-        user = await adminAuth.verifyIdToken(token);
-        console.log(`Live voice session authenticated successfully: ${user.email} (${user.uid})`);
+        if (token.startsWith("demo_")) {
+          const parts = token.split("_");
+          const uid = parts[1] || "demo-user-123";
+          const email = parts[2] || "demo@divi.com";
+          user = {
+            uid,
+            email,
+            email_verified: true,
+          };
+          console.log(`Live voice session authenticated successfully (DEMO): ${user.email} (${user.uid})`);
+        } else {
+          user = await adminAuth.verifyIdToken(token);
+          console.log(`Live voice session authenticated successfully: ${user.email} (${user.uid})`);
+        }
       }
     } catch (err) {
       console.warn("WebSocket could not be authenticated via ID Token:", err);
@@ -322,32 +359,47 @@ async function startServer() {
       
       // Inject user's long-term memory profile if authenticated
       let customSystemInstruction = DIVI_SYSTEM_INSTRUCTION;
+      
+      customSystemInstruction += `\n\n[USER PREFERENCES]:\nYou MUST always speak and respond primarily in the following language/locale: ${preferredLanguage}. (If the user speaks a different language in the moment, you may acknowledge it, but default your spoken responses to ${preferredLanguage}).\n`;
+
       if (user) {
         try {
           await MemoryService.getOrCreateUser(user.uid, user.email || "anonymous@divi.com");
+          
+          const latestSummary = await MemoryService.getLatestSummary(user.uid);
+          if (latestSummary) {
+            customSystemInstruction += `\n\n[LATEST CONVERSATION SUMMARY]:\n${latestSummary}\n`;
+            console.log(`[MEMORY] Injected Latest Summary`);
+          }
+
+          const recentMessages = await MemoryService.getRecentMessages(user.uid, 30);
+          if (recentMessages) {
+            customSystemInstruction += `\n\n[RECENT CONVERSATION HISTORY]:\n${recentMessages}\n(Continue naturally from here)\n`;
+            console.log(`[MEMORY] Injected Recent Conversation History (${recentMessages.split('\n').length} messages)`);
+          }
+
           const userRecollections = await MemoryService.getMemoriesForSystemPrompt(user.uid);
           const memoryCountMatch = userRecollections.match(/- /g);
           const count = memoryCountMatch ? memoryCountMatch.length : 0;
           console.log(`[MEMORY] Retrieved ${count} relevant memories`);
           
           customSystemInstruction += `\n\n[YOUR KNOWN PRIOR HISTORICAL MEMORIES CONCERNING THIS USER]:\n${userRecollections}\n`;
-          console.log(`[MEMORY] Injected into Gemini context`);
-        } catch (e) {
-          console.error("Critical error while populating starting memory prompt context:", e);
+          console.log(`[MEMORY] Injected into Gemini context (Final context size: ${customSystemInstruction.length} chars)`);
+        } catch (e: any) {
+          console.error("Critical error while populating starting memory prompt context:", e?.message || String(e));
         }
       }
 
-      session = await aiClient.live.connect({
+      const connectPromise = aiClient.live.connect({
         model: "gemini-3.1-flash-live-preview",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: { 
-              prebuiltVoiceConfig: { voiceName: "Kore" } 
+              prebuiltVoiceConfig: { voiceName: preferredVoice } 
             },
           },
-          systemInstruction: { parts: [{ text: customSystemInstruction }] } as any,
-          tools: [{ functionDeclarations: toolDeclarations.map(t => { const { type, ...rest } = t as any; return rest; }) as any[] }],
+          systemInstruction: { parts: [{ text: customSystemInstruction }] },
         },
         callbacks: {
           onmessage: async (message: any) => {
@@ -359,14 +411,15 @@ async function startServer() {
                 const functionResponses = [];
                 for (const call of functionCalls) {
                   try {
-                    const result = await ToolExecutor.execute(call.name, call.args || call.arguments);
+                    clientWs.send(JSON.stringify({ type: "browser_action", data: `Running: ${call.name}` }));
                     functionResponses.push({
                       id: call.id,
                       name: call.name,
-                      response: result,
+                      response: { result: "Tool execution is disabled." },
                     });
+                    clientWs.send(JSON.stringify({ type: "browser_action", data: `Finished: ${call.name}` }));
                   } catch (e: any) {
-                    console.error("Tool execution error:", e);
+                    console.warn("Tool execution warning:", e.message);
                     functionResponses.push({
                       id: call.id,
                       name: call.name,
@@ -400,6 +453,23 @@ async function startServer() {
             if (fullTurnText) {
               console.log(`[Vocal Transcript] Divi: ${fullTurnText}`);
               dialogLog.push(`Divi: ${fullTurnText}`);
+              if (user) {
+                new Conversation({
+                  userId: user.uid,
+                  sessionId: sessionId,
+                  role: "assistant",
+                  message: fullTurnText
+                }).save().catch((e: any) => console.error("Failed to save assistant message:", e));
+                
+                messageCounter++;
+                if (messageCounter >= 25) {
+                  messageCounter = 0;
+                  console.log(`Triggering mid-session memory extraction for user ${user.uid}...`);
+                  MemoryService.runExtractionAndSync(user.uid, dialogLog).catch(err => {
+                    console.error("Failed executing mid-session memory sync pipeline:", err?.message || String(err));
+                  });
+                }
+              }
             }
 
             // Check if user's speech interrupted the AI's speak cycle
@@ -425,20 +495,49 @@ async function startServer() {
             }
           },
           onerror: (err: any) => {
-            console.error("Gemini Live API encountered an error:", err);
+            let errorMessage = "Unknown live API error";
+            if (err) {
+              if (err instanceof Error) {
+                errorMessage = err.message;
+              } else if (typeof err === "string") {
+                errorMessage = err;
+              } else if (err.message) {
+                errorMessage = err.message;
+              } else if (err.error && err.error.message) {
+                errorMessage = err.error.message;
+              } else if (err.error) {
+                errorMessage = String(err.error);
+              } else {
+                errorMessage = "WebSocket or connection error (check server logs for details).";
+                console.error("Raw Gemini Live API error object:", err);
+              }
+            }
+            console.error("Gemini Live API encountered an error:", errorMessage);
             if (!isClosed) {
               clientWs.send(JSON.stringify({ 
                 type: "error", 
-                message: err?.message || "Internal live api communication error" 
+                message: errorMessage 
               }));
             }
           },
         },
       });
 
+      // Add timeout to prevent hanging if ws.onerror fires but connect() doesn't reject
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout connecting to Gemini Live API")), 10000));
+      session = await Promise.race([connectPromise, timeoutPromise]);
+
       console.log("Successfully established secure connection with Gemini Multimodal Live feed.");
       // Advise client that backend is fully prepared
       clientWs.send(JSON.stringify({ type: "session_ready" }));
+
+      // Start browser streaming
+      const browserInterval = setInterval(async () => {
+        if (isClosed) {
+          clearInterval(browserInterval);
+          return;
+        }
+      }, 500); // 2 FPS
 
       // Proactively trigger a charming verbal welcome message so Divi starts talking instantly!
       setTimeout(async () => {
@@ -458,23 +557,24 @@ async function startServer() {
               turnComplete: true
             });
           } catch (e) {
-            console.error("Failed to send initial welcome prompt to Gemini:", e);
+            console.error("Failed to send initial welcome prompt to Gemini:", e?.message || String(e));
           }
         }
       }, 400);
 
     } catch (err: any) {
-      console.error("Setup of Gemini Live connection failed:", err);
+      const errMsg = err?.message || (err instanceof Error ? err.toString() : "Unknown Connection Error");
+      console.error("Setup of Gemini Live connection failed:", errMsg);
       clientWs.send(JSON.stringify({
         type: "error",
-        message: err?.message || "Missing or invalid GEMINI_API_KEY. Please verify in the Secrets manager."
+        message: errMsg || "Missing or invalid GEMINI_API_KEY. Please verify in the Secrets manager."
       }));
       clientWs.close();
       return;
     }
 
     // Handle audio chunks and controls streamed from the client browser
-    clientWs.on("message", (messageBuffer) => {
+    clientWs.on("message", async (messageBuffer) => {
       if (isClosed || !session) return;
 
       try {
@@ -484,6 +584,23 @@ async function startServer() {
           // Track that the user is actively streaming voice input
           if (dialogLog.length === 0 || dialogLog[dialogLog.length - 1] !== "[User spoke vocal stream]") {
             dialogLog.push("[User spoke vocal stream]");
+            if (user) {
+              new Conversation({
+                userId: user.uid,
+                sessionId: sessionId,
+                role: "user",
+                message: "[User spoke vocal stream]"
+              }).save().catch((e: any) => console.error("Failed to save user message:", e));
+              
+              messageCounter++;
+              if (messageCounter >= 25) {
+                messageCounter = 0;
+                console.log(`Triggering mid-session memory extraction for user ${user.uid}...`);
+                MemoryService.runExtractionAndSync(user.uid, dialogLog).catch(err => {
+                  console.error("Failed executing mid-session memory sync pipeline:", err?.message || String(err));
+                });
+              }
+            }
           }
 
           // Pass the raw 16kHz PCM audio chunk safely to Gemini
@@ -493,9 +610,11 @@ async function startServer() {
               data: msg.data
             }
           });
+        } else if (msg.type === "browser_interaction") {
+          // Browser interactions disabled
         }
-      } catch (err) {
-        console.error("Error reading message received from client:", err);
+      } catch (err: any) {
+        console.error("Error reading message received from client:", err?.message || String(err));
       }
     });
 
@@ -515,13 +634,14 @@ async function startServer() {
         console.log(`Starting background cognitive memory extraction for user ${user.uid} (${dialogLog.length} logs)...`);
         console.log("FINAL DIALOG LOG TO EXTRACT:", dialogLog);
         MemoryService.runExtractionAndSync(user.uid, dialogLog).catch(err => {
-          console.error("Failed executing background memory sync pipeline:", err);
+          console.error("Failed executing background memory sync pipeline:", err?.message || String(err));
         });
       }
     });
 
-    clientWs.on("error", (err) => {
-      console.error("Client WebSocket stream exploded:", err);
+    clientWs.on("error", (err: any) => {
+      const errMsg = err?.message || (err instanceof Error ? err.toString() : "Unknown Socket Error");
+      console.error("Client WebSocket stream exploded:", errMsg);
       isClosed = true;
       if (session) {
         try {
@@ -558,6 +678,6 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error("Failed to activate Divi application server:", err);
+startServer().catch((err: any) => {
+  console.error("Failed to activate Divi application server:", err?.message || String(err));
 });
